@@ -13,6 +13,7 @@ from versioned_store import VersionedKVStore
 from cc_core import ConcurrencyControl, Transaction, CommitResult, TxStatus
 from cc_protocols.strict2pl import Strict2PL
 from cc_protocols.read_committed import ReadCommitted
+from cc_protocols.occ import OCC
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -24,15 +25,57 @@ def get_cc_factory():
     mapping = {
         "Strict2PL": Strict2PL,
         "ReadCommitted": ReadCommitted,
+        "OCC": OCC,
     }
     return mapping.get(name, Strict2PL)
 
 
 @dataclass
 class Op:
+    seq: int
     txid: int
     kind: str  # 'R' or 'W'
     key: str
+
+
+class MockKVStore(VersionedKVStore):
+    """
+    Store wrapper that logs get/put operations at the time they actually hit storage.
+    Uses thread-local binding to attribute operations to the current transaction ID.
+    """
+    def __init__(self, on_get, on_put, get_txid):
+        super().__init__()
+        self._on_get = on_get
+        self._on_put = on_put
+        self._get_txid = get_txid
+        self._tls = threading.local()
+
+    def bind_txid(self, txid: int) -> None:
+        setattr(self._tls, "txid", txid)
+
+    def current_txid(self) -> Optional[int]:
+        return getattr(self._tls, "txid", None)
+
+    # Override
+    def get(self, key: str, ts: int) -> Optional[int]:
+        val = super().get(key, ts)
+        txid = self.current_txid()
+        if txid is None:
+            txid = self._get_txid()
+        if txid is not None:
+            self._on_get(txid, key)
+        return val
+
+    # Override
+    def put(self, writes: Dict[str, int], commit_ts: int) -> None:
+        txid = self.current_txid()
+        if txid is None:
+            txid = self._get_txid()
+        # Log per-key writes before applying
+        if txid is not None:
+            for k in writes.keys():
+                self._on_put(txid, k)
+        super().put(writes, commit_ts)
 
 
 class ConcurrentRunner:
@@ -51,15 +94,37 @@ class ConcurrentRunner:
         self.duration_s = duration_s
         self.stall_threshold_s = stall_threshold_s
 
-        self.store = VersionedKVStore()
+        self._ops: List[Op] = []
+        self._ops_lock = threading.Lock()
+        self._seq = 0
+
+        def next_seq() -> int:
+            # there should be a lock on ops_lock before the execution of this function. to ensure operation ordering. 
+            self._seq += 1
+            return self._seq
+
+        # Callbacks used by MockKVStore
+        def on_get(txid: int, key: str) -> None:
+            with self._ops_lock:
+                self._ops.append(Op(seq=next_seq(), txid=txid, kind='R', key=key))
+
+        def on_put(txid: int, key: str) -> None:
+            with self._ops_lock:
+                self._ops.append(Op(seq=next_seq(), txid=txid, kind='W', key=key))
+
+        def get_txid() -> Optional[int]:
+            # Fallback: use thread-local bound txid from runner if store has none
+            return getattr(self._tls, "txn_txid", None)
+
+        self._tls = threading.local()
+        self.store = MockKVStore(on_get=on_get, on_put=on_put, get_txid=get_txid)
         self.cc: ConcurrencyControl = self.cc_factory()
 
-        self._ops: List[Op] = []
         self._committed: Set[int] = set()
         self._aborted: Set[int] = set()
 
         # Progress tracking
-        self._tls = threading.local()             # each thread stores its slot index here
+        self._progress_tls = threading.local()      # each thread stores its slot index here
         self._progress_slots: List[float] = [0.0] * self.num_workers
         self._slot_for_tid: Dict[int, int] = {}
         self._slot_lock = threading.Lock()
@@ -77,15 +142,25 @@ class ConcurrentRunner:
                 slot = self._next_slot
                 self._next_slot += 1
                 self._slot_for_tid[tid] = slot
-                setattr(self._tls, "slot", slot)
+                setattr(self._progress_tls, "slot", slot)
                 self._progress_slots[slot] = time.time()
             while not stop.is_set():
                 try:
-                    txn = self.cc.begin(self.store)
-                    workload(self, txn)
+                    try:
+                        txn = self.cc.begin(self.store)
+                        # Bind transaction ID for this thread in both runner and store
+                        setattr(self._tls, "txn_txid", txn.txid)
+                        self.store.bind_txid(txn.txid)
+                        workload(self, txn)
+                    except Exception as e:
+                        print(f"Error during transaction processing: {e}")
+                    finally:
+                        # Clear binding after workload iteration
+                        setattr(self._tls, "txn_txid", None)
+                        self.store.bind_txid(-1)
                 except Exception:
                     # On exception, still update progress to avoid false stalls
-                    slot_idx = getattr(self._tls, "slot", None)
+                    slot_idx = getattr(self._progress_tls, "slot", None)
                     if slot_idx is not None and 0 <= slot_idx < len(self._progress_slots):
                         self._progress_slots[slot_idx] = time.time()
 
@@ -99,7 +174,8 @@ class ConcurrentRunner:
         for t in threads:
             t.join(timeout=1)
         # Filter ops to only those from committed transactions
-        committed_ops = [op for op in self._ops if op.txid in self._committed]
+        with self._ops_lock:
+            committed_ops = [op for op in self._ops if op.txid in self._committed]
 
         # Detect stalled threads: no progress update within stall_threshold
         now = time.time()
@@ -119,23 +195,25 @@ class ConcurrentRunner:
     # ---------- Logging wrappers ----------
 
     def _touch_progress(self) -> None:
-        slot_idx = getattr(self._tls, "slot", None)
+        slot_idx = getattr(self._progress_tls, "slot", None)
         if slot_idx is not None and 0 <= slot_idx < len(self._progress_slots):
-            # list assignment is atomic under the GIL; no lock needed here
             self._progress_slots[slot_idx] = time.time()
 
     def log_read(self, txn: Transaction, key: str) -> Optional[int]:
+        # No direct op logging here; store will log on actual get
         val = self.cc.read(txn, key, self.store)
-        self._ops.append(Op(txid=txn.txid, kind='R', key=key))
         self._touch_progress()
         return val if isinstance(val, int) else (val if val is not None else None)
 
     def log_write(self, txn: Transaction, key: str, value: int) -> None:
+        # No direct op logging here; store will log on actual put (likely at commit)
         self.cc.write(txn, key, value, self.store)
-        self._ops.append(Op(txid=txn.txid, kind='W', key=key))
         self._touch_progress()
 
     def log_commit(self, txn: Transaction) -> CommitResult:
+        # Bind txn id in case CC performs store IO during commit
+        setattr(self._tls, "txn_txid", txn.txid)
+        self.store.bind_txid(txn.txid)
         res = self.cc.commit(txn, self.store)
         if res.ok:
             self._committed.add(txn.txid)
@@ -157,6 +235,7 @@ def build_precedence_graph(ops: List[Op]) -> Dict[int, Set[int]]:
     For each key, for every pair of conflicting ops between different txns,
     add an edge from earlier op's txn to later op's txn.
     Conflicts: RW, WR, WW (on the same key).
+    Ordering is determined by the store-level sequence recorded at IO time.
     """
     graph: Dict[int, Set[int]] = {}
     by_key: Dict[str, List[Op]] = {}
@@ -165,10 +244,12 @@ def build_precedence_graph(ops: List[Op]) -> Dict[int, Set[int]]:
         graph.setdefault(op.txid, set())
 
     for key, key_ops in by_key.items():
-        for i in range(len(key_ops)):
-            oi = key_ops[i]
-            for j in range(i + 1, len(key_ops)):
-                oj = key_ops[j]
+        key_ops_sorted = sorted(key_ops, key=lambda o: o.seq)
+        n = len(key_ops_sorted)
+        for i in range(n):
+            oi = key_ops_sorted[i]
+            for j in range(i + 1, n):
+                oj = key_ops_sorted[j]
                 if oi.txid == oj.txid:
                     continue
                 if oi.kind == 'R' and oj.kind == 'R':
