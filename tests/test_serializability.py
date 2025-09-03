@@ -234,39 +234,47 @@ class ConcurrentRunner:
 @dataclass
 class _KeyState:
     last_writer: Optional[int] = None
-    readers: Set[int] = field(default_factory=set)
+    last_writer_seq: Optional[int] = None
+    readers: Dict[int, int] = field(default_factory=dict)  # txid -> first read seq in this epoch
 
 
-def build_precedence_graph_fast(ops: List[Op]) -> Dict[int, Set[int]]:
+def build_precedence_graph_fast(ops: List[Op]) -> Tuple[Dict[int, Set[int]], Dict[Tuple[int, int], List[Dict[str, int]]]]:
     """
     Linear in ops + edges.
     Assumes ops are only from committed txns and in increasing seq order.
+    Returns (graph, evidence) where evidence[(u,v)] is a list of dicts with
+    {key, cause, from_seq, to_seq}; cause: 0=W→R, 1=W→W, 2=R→W.
     """
     graph: Dict[int, Set[int]] = defaultdict(set)
+    evidence: Dict[Tuple[int, int], List[Dict[str, int]]] = defaultdict(list)
+
     # ensure all txids appear as nodes
     for op in ops:
         graph.setdefault(op.txid, set())
 
     state: Dict[str, _KeyState] = {}
-    # ops assumed sorted by seq (producer ensures monotonic seq)
 
     for op in ops:
         ks = state.setdefault(op.key, _KeyState())
         if op.kind == 'R':
-            lw = ks.last_writer
+            lw, lwseq = ks.last_writer, ks.last_writer_seq
             if lw is not None and lw != op.txid:
                 graph[lw].add(op.txid)            # W→R
-            ks.readers.add(op.txid)               # dedup
+                evidence[(lw, op.txid)].append({"key": op.key, "cause": 0, "from_seq": lwseq or -1, "to_seq": op.seq})
+            ks.readers.setdefault(op.txid, op.seq)  # dedup
         else:  # 'W'
-            lw = ks.last_writer
+            lw, lwseq = ks.last_writer, ks.last_writer_seq
             if lw is not None and lw != op.txid:
                 graph[lw].add(op.txid)            # W→W
-            for r in ks.readers:
+                evidence[(lw, op.txid)].append({"key": op.key, "cause": 1, "from_seq": lwseq or -1, "to_seq": op.seq})
+            for r, rseq in ks.readers.items():
                 if r != op.txid:
                     graph[r].add(op.txid)         # R→W
+                    evidence[(r, op.txid)].append({"key": op.key, "cause": 2, "from_seq": rseq, "to_seq": op.seq})
             ks.last_writer = op.txid
+            ks.last_writer_seq = op.seq
             ks.readers.clear()
-    return graph
+    return graph, evidence
 
 
 def has_cycle_kahn(graph: Dict[int, Set[int]]) -> bool:
@@ -286,6 +294,104 @@ def has_cycle_kahn(graph: Dict[int, Set[int]]) -> bool:
             if indeg[v] == 0:
                 q.append(v)
     return seen != len(indeg)
+
+
+def explain_cycle_kahn(graph: Dict[int, Set[int]], evidence: Dict[Tuple[int, int], List[Dict[str, int]]], ops: List[Op]) -> str:
+    # Kahn to find remaining subgraph nodes
+    indeg = {u: 0 for u in graph}
+    for u, vs in graph.items():
+        for v in vs:
+            indeg[v] = indeg.get(v, 0) + 1
+            if v not in graph:
+                graph[v] = set()
+    q = deque([u for u, d in indeg.items() if d == 0])
+    while q:
+        u = q.popleft()
+        for v in graph[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                q.append(v)
+    remaining = {u for u, d in indeg.items() if d > 0}
+    if not remaining:
+        return "Cycle present but could not isolate remaining subgraph."
+
+    # Build subgraph over remaining nodes
+    sub_adj: Dict[int, List[int]] = {u: [v for v in graph[u] if v in remaining] for u in remaining}
+    # Pick an edge to start
+    start = None
+    for u, vs in sub_adj.items():
+        if vs:
+            start = u
+            break
+    if start is None:
+        return "Cycle present but no edges in residual graph."
+
+    # Walk to find a cycle (iterative)
+    path: List[int] = []
+    in_path: Dict[int, int] = {}
+    cur = start
+    while True:
+        path.append(cur)
+        in_path[cur] = len(path) - 1
+        if not sub_adj[cur]:
+            # dead-end; try another node with edges
+            next_start = None
+            for u, vs in sub_adj.items():
+                if vs and u not in in_path:
+                    next_start = u
+                    break
+            if next_start is None:
+                return "Could not extract specific cycle path."
+            cur = next_start
+            continue
+        nxt = sub_adj[cur][0]
+        if nxt in in_path:
+            cycle_nodes = path[in_path[nxt]:] + [nxt]
+            break
+        cur = nxt
+
+    # Format using evidence
+    def cause_name(c: int) -> str:
+        return {0: "W→R", 1: "W→W", 2: "R→W"}.get(c, "?")
+
+    lines: List[str] = []
+    lines.append(f"Cycle txns: {cycle_nodes}")
+    lines.append("Edges (with example evidence):")
+    for i in range(len(cycle_nodes) - 1):
+        u = cycle_nodes[i]
+        v = cycle_nodes[i + 1]
+        evs = evidence.get((u, v), [])
+        if not evs:
+            lines.append(f"  {u} -> {v} (no evidence captured)")
+            continue
+        ev = evs[0]
+        from_seq, to_seq = ev.get("from_seq", -1), ev.get("to_seq", -1)
+        lines.append(
+            f"  {u} -> {v} via {cause_name(ev.get('cause', -1))} on key '{ev.get('key','?')}' (from seq {from_seq}, to seq {to_seq})"
+        )
+
+    # Add per-transaction ops and cross-tx op order
+    tx_set = set(cycle_nodes)
+    tx_ops: Dict[int, List[Op]] = defaultdict(list)
+    for op in ops:
+        if op.txid in tx_set:
+            tx_ops[op.txid].append(op)
+    # Ensure ordering by seq
+    for txid in tx_ops:
+        tx_ops[txid].sort(key=lambda o: o.seq)
+
+    lines.append("Transactions ops:")
+    for txid in cycle_nodes:
+        ops_str = " ".join(f"{o.kind}({o.key})" for o in tx_ops.get(txid, []))
+        lines.append(f"  T[{txid}]: {ops_str}")
+
+    lines.append("Operation order for these transactions:")
+    filtered = [o for o in ops if o.txid in tx_set]
+    filtered.sort(key=lambda o: o.seq)
+    order_str = " ".join(f"{o.kind}_{o.txid}({o.key})" for o in filtered)
+    lines.append(f"  {order_str}")
+
+    return "\n".join(lines)
 
 
 # ---------- Workloads ----------
@@ -335,16 +441,20 @@ class TestSerializability(unittest.TestCase):
         runner = ConcurrentRunner(get_cc_factory(), num_workers=8, duration_s=1.0)
         ops, committed, _ = runner.run(wl_counter)
         logger.info(f"Throughput: {len(committed) / runner.duration_s} transactions per second")
-        graph = build_precedence_graph_fast(ops)
-        self.assertFalse(has_cycle_kahn(graph), msg=f"Cycle detected in the precedence graph")
+        graph, evidence = build_precedence_graph_fast(ops)
+        if has_cycle_kahn(graph):
+            feedback = explain_cycle_kahn(graph, evidence, ops)
+            self.fail("Conflict cycle detected:\n" + feedback)
         self.assertGreater(len(committed), 0)
 
     def test_bank_conflict_serializable(self) -> None:
         runner = ConcurrentRunner(get_cc_factory(), num_workers=8, duration_s=1.0)
         ops, committed, _ = runner.run(wl_bank)
         logger.info(f"Throughput: {len(committed) / runner.duration_s} transactions per second")
-        graph = build_precedence_graph_fast(ops)
-        self.assertFalse(has_cycle_kahn(graph), msg=f"Cycle detected in the precedence graph")
+        graph, evidence = build_precedence_graph_fast(ops)
+        if has_cycle_kahn(graph):
+            feedback = explain_cycle_kahn(graph, evidence, ops)
+            self.fail("Conflict cycle detected:\n" + feedback)
         self.assertGreater(len(committed), 0)
 
     def test_progress_no_deadlock_freeze(self) -> None:
@@ -352,8 +462,10 @@ class TestSerializability(unittest.TestCase):
         runner = ConcurrentRunner(get_cc_factory(), num_workers=8, duration_s=5, stall_threshold_s=0.2)
         ops, committed, stalled = runner.run(wl_deadlock_prone)
         self.assertEqual(len(stalled), 0, msg=f"Stalled threads detected: {stalled}")
-        graph = build_precedence_graph_fast(ops)
-        self.assertFalse(has_cycle_kahn(graph), msg=f"Cycle detected in the precedence graph")
+        graph, evidence = build_precedence_graph_fast(ops)
+        if has_cycle_kahn(graph):
+            feedback = explain_cycle_kahn(graph, evidence, ops)
+            self.fail("Conflict cycle detected:\n" + feedback)
 
 
 if __name__ == "__main__":
