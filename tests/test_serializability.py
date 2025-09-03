@@ -5,8 +5,9 @@ import threading
 import time
 import random
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
+from collections import defaultdict, deque
 
 
 from versioned_store import VersionedKVStore
@@ -153,7 +154,7 @@ class ConcurrentRunner:
                         self.store.bind_txid(txn.txid)
                         workload(self, txn)
                     except Exception as e:
-                        print(f"Error during transaction processing: {e}")
+                        logger.error(f"Error during transaction processing: {e}")
                     finally:
                         # Clear binding after workload iteration
                         setattr(self._tls, "txn_txid", None)
@@ -228,59 +229,63 @@ class ConcurrentRunner:
         self._touch_progress()
 
 
-# ---------- Precedence graph ----------
+# ---------- Precedence graph (efficient) ----------
 
-def build_precedence_graph(ops: List[Op]) -> Dict[int, Set[int]]:
+@dataclass
+class _KeyState:
+    last_writer: Optional[int] = None
+    readers: Set[int] = field(default_factory=set)
+
+
+def build_precedence_graph_fast(ops: List[Op]) -> Dict[int, Set[int]]:
     """
-    For each key, for every pair of conflicting ops between different txns,
-    add an edge from earlier op's txn to later op's txn.
-    Conflicts: RW, WR, WW (on the same key).
-    Ordering is determined by the store-level sequence recorded at IO time.
+    Linear in ops + edges.
+    Assumes ops are only from committed txns and in increasing seq order.
     """
-    graph: Dict[int, Set[int]] = {}
-    by_key: Dict[str, List[Op]] = {}
+    graph: Dict[int, Set[int]] = defaultdict(set)
+    # ensure all txids appear as nodes
     for op in ops:
-        by_key.setdefault(op.key, []).append(op)
         graph.setdefault(op.txid, set())
 
-    for key, key_ops in by_key.items():
-        key_ops_sorted = sorted(key_ops, key=lambda o: o.seq)
-        n = len(key_ops_sorted)
-        for i in range(n):
-            oi = key_ops_sorted[i]
-            for j in range(i + 1, n):
-                oj = key_ops_sorted[j]
-                if oi.txid == oj.txid:
-                    continue
-                if oi.kind == 'R' and oj.kind == 'R':
-                    continue
-                # Conflict -> add edge oi.txid -> oj.txid
-                graph.setdefault(oi.txid, set()).add(oj.txid)
-                graph.setdefault(oj.txid, set())
+    state: Dict[str, _KeyState] = {}
+    # ops assumed sorted by seq (producer ensures monotonic seq)
+
+    for op in ops:
+        ks = state.setdefault(op.key, _KeyState())
+        if op.kind == 'R':
+            lw = ks.last_writer
+            if lw is not None and lw != op.txid:
+                graph[lw].add(op.txid)            # W→R
+            ks.readers.add(op.txid)               # dedup
+        else:  # 'W'
+            lw = ks.last_writer
+            if lw is not None and lw != op.txid:
+                graph[lw].add(op.txid)            # W→W
+            for r in ks.readers:
+                if r != op.txid:
+                    graph[r].add(op.txid)         # R→W
+            ks.last_writer = op.txid
+            ks.readers.clear()
     return graph
 
 
-def has_cycle(graph: Dict[int, Set[int]]) -> bool:
-    visited: Set[int] = set()
-    stack: Set[int] = set()
-
-    def dfs(u: int) -> bool:
-        if u in stack:
-            return True
-        if u in visited:
-            return False
-        visited.add(u)
-        stack.add(u)
-        for v in graph.get(u, set()):
-            if dfs(v):
-                return True
-        stack.remove(u)
-        return False
-
-    for node in list(graph.keys()):
-        if dfs(node):
-            return True
-    return False
+def has_cycle_kahn(graph: Dict[int, Set[int]]) -> bool:
+    indeg = {u: 0 for u in graph}
+    for u, vs in graph.items():
+        for v in vs:
+            indeg[v] = indeg.get(v, 0) + 1
+            if v not in graph:
+                graph[v] = set()
+    q = deque([u for u, d in indeg.items() if d == 0])
+    seen = 0
+    while q:
+        u = q.popleft()
+        seen += 1
+        for v in graph[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                q.append(v)
+    return seen != len(indeg)
 
 
 # ---------- Workloads ----------
@@ -330,16 +335,16 @@ class TestSerializability(unittest.TestCase):
         runner = ConcurrentRunner(get_cc_factory(), num_workers=8, duration_s=1.0)
         ops, committed, _ = runner.run(wl_counter)
         logger.info(f"Throughput: {len(committed) / runner.duration_s} transactions per second")
-        graph = build_precedence_graph(ops)
-        self.assertFalse(has_cycle(graph), msg=f"Cycle detected in the precedence graph")
+        graph = build_precedence_graph_fast(ops)
+        self.assertFalse(has_cycle_kahn(graph), msg=f"Cycle detected in the precedence graph")
         self.assertGreater(len(committed), 0)
 
     def test_bank_conflict_serializable(self) -> None:
         runner = ConcurrentRunner(get_cc_factory(), num_workers=8, duration_s=1.0)
         ops, committed, _ = runner.run(wl_bank)
         logger.info(f"Throughput: {len(committed) / runner.duration_s} transactions per second")
-        graph = build_precedence_graph(ops)
-        self.assertFalse(has_cycle(graph), msg=f"Cycle detected in the precedence graph")
+        graph = build_precedence_graph_fast(ops)
+        self.assertFalse(has_cycle_kahn(graph), msg=f"Cycle detected in the precedence graph")
         self.assertGreater(len(committed), 0)
 
     def test_progress_no_deadlock_freeze(self) -> None:
@@ -347,8 +352,8 @@ class TestSerializability(unittest.TestCase):
         runner = ConcurrentRunner(get_cc_factory(), num_workers=8, duration_s=5, stall_threshold_s=0.2)
         ops, committed, stalled = runner.run(wl_deadlock_prone)
         self.assertEqual(len(stalled), 0, msg=f"Stalled threads detected: {stalled}")
-        graph = build_precedence_graph(ops)
-        self.assertFalse(has_cycle(graph), msg=f"Cycle detected in the precedence graph")
+        graph = build_precedence_graph_fast(ops)
+        self.assertFalse(has_cycle_kahn(graph), msg=f"Cycle detected in the precedence graph")
 
 
 if __name__ == "__main__":
