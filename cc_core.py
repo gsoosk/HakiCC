@@ -29,7 +29,7 @@ class TxStatus(Enum):
 @dataclass
 class Transaction:
     """Per-transaction state shared with the CC algorithm."""
-    txid: int
+    txid: int # this should be unique for each transaction. 
     start_ts: int
     status: TxStatus = TxStatus.ACTIVE
     read_set: Dict[str, int] = field(default_factory=dict)   # key -> version begin_ts read
