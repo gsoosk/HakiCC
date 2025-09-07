@@ -7,3 +7,4 @@ __all__ = [
     "ReadCommitted",
     "OCC",
 ]
+from .generated_cc import GeneratedCC

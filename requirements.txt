@@ -1,3 +1,7 @@
 langgraph
 langsmith
 grandalf
+langchain
+langchain_community
+langchain-google-vertexai
+langchain-google-genai
