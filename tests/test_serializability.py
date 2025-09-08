@@ -15,6 +15,7 @@ from cc_core import ConcurrencyControl, Transaction, CommitResult, TxStatus
 from cc_protocols.strict2pl import Strict2PL
 from cc_protocols.read_committed import ReadCommitted
 from cc_protocols.occ import OCC
+from cc_protocols.generated_cc import GeneratedCC
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +28,7 @@ def get_cc_factory():
         "Strict2PL": Strict2PL,
         "ReadCommitted": ReadCommitted,
         "OCC": OCC,
+        "GeneratedCC": GeneratedCC,
     }
     return mapping.get(name, Strict2PL)
 

@@ -74,6 +74,7 @@ def get_generate_prompt() -> str:
     Your code will be tested afterward by a test harness that will be providedto to check if it conforms to the concurrency control principles.
     If it does not, you should modify your code and try again given the feedback provided. 
     If it does, your implementation goes thorough novelty check and performance check and if it does not satisfy the requirements, you should modify your code and try again given the feedback provided.
+    The feedback will be provided to you in the <observe> tag.
     """
 
     return prompt
