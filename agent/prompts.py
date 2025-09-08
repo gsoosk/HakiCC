@@ -66,12 +66,12 @@ def get_generate_prompt() -> str:
         * You can import required modules from the codebase as follows: 
           from cc_core import ConcurrencyControl, Transaction, CommitResult, TxStatus
 
-        * You can implement your own classes to be used in the concurrency control protocol. 
+        * You can implement your own classes to be used in your concurrency control protocol if needed. 
         * IMPORTANT: do not re-implement any existing classes. You can only import and use them.
 
 
     
-    Your code will be tested afterward by a test harness that will be providedto to check if it conforms to the concurrency control principles.
+    Your code will be tested afterward by a test harness that will be provided to check if it conforms to the concurrency control principles.
     If it does not, you should modify your code and try again given the feedback provided. 
     If it does, your implementation goes thorough novelty check and performance check and if it does not satisfy the requirements, you should modify your code and try again given the feedback provided.
     The feedback will be provided to you in the <observe> tag.

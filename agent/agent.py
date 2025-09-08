@@ -54,11 +54,10 @@ class Agent:
             # """
             
 
-            if self.code_iteration == 0: 
-                prompt = get_generate_prompt()
-                messages = [HumanMessage(content=prompt)] + state["messages"]
-            else:
-                messages = state["messages"]
+
+            prompt = get_generate_prompt()
+            messages = [HumanMessage(content=prompt)] + state["messages"]
+
                 
             llm_response = str(self.llm.invoke(messages).content)
 
@@ -135,11 +134,11 @@ class Agent:
                 feedback = "\n".join(details_lines)
 
                 # Add feedback message for the LLM
-                state["messages"].append(SystemMessage(content=f"<observe>{feedback}</observe>"))
+                state["messages"].append(HumanMessage(content=f"<observe>{feedback}</observe>"))
                 state["next_step"] = "correct" if result.wasSuccessful() else "incorrect"
             except Exception as e:
                 err_text = traceback.format_exc()
-                state["messages"].append(SystemMessage(content=f"<observe>Exception while running tests: {e}\n{err_text}</observe>"))
+                state["messages"].append(HumanMessage(content=f"<observe>Exception while running tests: {e}\n{err_text}</observe>"))
                 state["next_step"] = "incorrect"
             finally:
                 output_stream.close()
