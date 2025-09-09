@@ -14,7 +14,9 @@ from versioned_store import VersionedKVStore
 # 2. put(writes: Dict[str, Any], commit_ts: int) -> None: This method adds new versions of keys to the store at a specified commit timestamp (commit_ts).
 #    It takes a dictionary of key-value pairs to be written and appends them as new versions in the store.
 # These methods are essential for implementing concurrency control mechanisms as they allow transactions to read consistent snapshots and commit changes atomically.
-# IMPORTANT: YOU DO NOT NEED TO IMPLEMENT THE VersionedKVStore class. It is already implemented and could be imported. Just use it.
+# IMPORTANT: YOU DO NOT NEED TO IMPLEMENT THE VersionedKVStore class. It is already implemented and could be imported. Just improt it and  use it.
+# Import it as follows:
+# from versioned_store import VersionedKVStore
 
 
 

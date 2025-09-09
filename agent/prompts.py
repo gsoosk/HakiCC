@@ -1,12 +1,52 @@
 
 
-
-def get_generate_prompt() -> str:
-
+def get_propose_prompt() -> str:
     with open('cc_core.py', 'r') as file:
         codebase = file.read()
     prompt = f"""
-    You are an expert in database concurrency control design and implementation.
+    You are an expert in database concurrency control research and design.
+    Your task is to invent completely new concurrency control protocols — beyond the scope of classical methods like 2PL (Two-Phase Locking), OCC (Optimistic Concurrency Control), or MVCC (Multi-Version Concurrency Control).
+    First, propose a truly novel concurrency control protocol conceptually. Do NOT write code yet.
+
+    You will be prompted to write a python code in the future for your protocol based on a codebase that will be provided.
+    You will keep improving your protocol until it is correct and novel.
+
+    Propose a radical, novel, and creative ideas for concurrency control protocols. 
+    These should be:
+    - Correct (i.e., ensure serializability or a similarly strong isolation level)
+    - Efficient (good throughput and minimal overhead)
+    - Novel (no rehashed or modified versions of 2PL, OCC, or MVCC)
+
+    Let your imagination run wild — combine ideas from distributed systems, machine learning, cryptography, game theory, biology, physics, or even social systems. 
+    The goal is to explore uncharted design space.
+
+    Constraints:
+    - Must be fundamentally different from classical 2PL, OCC, MVCC, SSI, or their trivial variants
+    - Clearly define: metadata maintained, read/write visibility rule, commit rule, conflict handling, abort conditions
+    - Explain why it can ensure serializability or a chosen isolation level
+    - Discuss expected trade-offs (throughput, abort rate, latency) and workloads it suits
+
+    Output Format:
+    - Provide a concise name and a 5-10 bullet point design spec
+    - Core Idea: Summarize the intuition behind the protocol.
+    - Novelty: Why is this approach truly different from traditional concurrency control mechanisms?
+    - Correctness: How does the protocol ensure serializability (or another well-defined correctness criterion)? Provide justification.
+    - How It Works (Step-by-Step): Describe the protocol’s execution flow, including:
+        - Transaction begin
+        - Read/write operations
+        - Conflict detection/resolution (if any)
+        - Commit/Rollback logic
+    - Wrap any example traces or structured artifacts within <observe> ... </observe>
+    - Trade-offs or Open Questions (optional): Any areas where further analysis or experimentation is needed.
+    """
+    return prompt
+
+
+def get_generate_prompt() -> str:
+    with open('cc_core.py', 'r') as file:
+        codebase = file.read()
+    prompt = f"""
+    You are an expert in database concurrency control implementation.
     Your task is to implement a concurrency control protocol in Python based on the provided codebase.
     To do this, you will be provided a codebase as a guide to for implementing a concurrency control protocol. 
     Eventually, you'll create a concrete class that extends the abstract class ConcurrencyControl, 
@@ -26,11 +66,11 @@ def get_generate_prompt() -> str:
 
     Purpose: This step is essential to ground your implementation in the architecture already provided.
 
+    Step 2: Implement the proposed Concurrency Control Protocol
+    Your mission is to implemente the completely new concurrency control protocols. You can fix this protocol based on the feedback provided.
 
+    Your implementation 
 
-    Step 2: Design a new and novel Concurrency Control Protocol
-    Your mission is to invent completely new concurrency control protocols — beyond the scope of classical methods like 2PL (Two-Phase Locking), OCC (Optimistic Concurrency Control), or MVCC (Multi-Version Concurrency Control).
-    IMPORTANT: Implementing a protocol that is already known or similar to existing protocols is not allowed
 
     Make a plan first. The plan should be a numbered list of steps that you will take to solve the task. Be specific and detailed.
     Format your plan as a checklist with empty checkboxes like this:
@@ -58,6 +98,7 @@ def get_generate_prompt() -> str:
         * You should return your final implementation of the concurrency control protocol in python.
         * Your code should be enclosed using "<execute>" tag, for example: <execute> print("Hello World!") </execute>.
         * IMPORTANT: You must end the code block with </execute> tag.
+        * the code inside the <execute> tag should be a valid python code. do not include any other text.
 
         * Only return the code you newly implemented. Do not return the codebase as it already exists. 
 
@@ -76,5 +117,31 @@ def get_generate_prompt() -> str:
     If it does, your implementation goes thorough novelty check and performance check and if it does not satisfy the requirements, you should modify your code and try again given the feedback provided.
     The feedback will be provided to you in the <observe> tag.
     """
+    return prompt
 
+
+
+
+def get_incorrect_code_prompt(feedback: str) -> str:
+    prompt = f"""
+    Your previous code is incorrect. Please modify it to fix the issues.
+    The feedback is as follows:
+    <observe>
+    {feedback}
+    </observe>
+    """
+    return prompt
+
+
+def get_invalid_generate_prompt() -> str:
+    prompt = f"""
+    Your previous code is invalid. Please generate a new code.
+    The code should be enclosed using "<execute>" tag, for example: <execute> print("Hello World!") </execute>.
+    IMPORTANT: You must end the code block with </execute> tag.
+    the code inside the <execute> tag should be a valid python code. do not include any other text.
+    Only return the code you newly implemented. Do not return the codebase as it already exists. 
+    Your final concurrency control protocol class should be named as "GeneratedCC" and it should extend the ConcurrencyControl class.
+    You can import required modules from the codebase as follows: 
+    from cc_core import ConcurrencyControl, Transaction, CommitResult, TxStatus
+    """
     return prompt

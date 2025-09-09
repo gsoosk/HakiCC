@@ -15,7 +15,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 
 from .llm import get_llm
-from .prompts import get_generate_prompt
+from .prompts import get_generate_prompt, get_incorrect_code_prompt, get_invalid_generate_prompt, get_propose_prompt
 
 
 
@@ -42,6 +42,14 @@ class Agent:
 
 
     def build_workflow(self):
+        def cc_proposer(state: State) -> State:
+            prompt = get_propose_prompt()
+            state["messages"].append(HumanMessage(content=prompt))
+            llm_response = str(self.llm.invoke(state["messages"]).content)
+            state["messages"].append(AIMessage(content=llm_response))
+            state["next_step"] = "generate"
+            return state
+
         def cc_generator(state: State) -> State:
             project_root = Path(__file__).resolve().parent.parent
             proto_dir = project_root / "cc_protocols"
@@ -52,14 +60,12 @@ class Agent:
             #         only return the code, no other text
             #         Interact with a programming environment and receive the corresponding output within <observe></observe>. Your code should be enclosed using "<execute>" tag, for example: <execute> print("Hello World!") </execute>. IMPORTANT: You must end the code block with </execute> tag.
             # """
-            
+
+            if self.code_iteration == 0: 
+                state["messages"].append(HumanMessage(content=get_generate_prompt()))
 
 
-            prompt = get_generate_prompt()
-            messages = [HumanMessage(content=prompt)] + state["messages"]
-
-                
-            llm_response = str(self.llm.invoke(messages).content)
+            llm_response = str(self.llm.invoke(state["messages"]).content)
 
             if "<execute>" in llm_response and "</execute>" not in llm_response:
                 llm_response += "</execute>"
@@ -70,6 +76,7 @@ class Agent:
             execute_match = re.search(r"<execute>(.*?)</execute>", llm_response, re.DOTALL)
             execute_code = execute_match.group(1) if execute_match else ""
             self.code_iteration += 1
+            state["messages"].append(AIMessage(content=f"Iteration: {self.code_iteration}, {llm_response.strip()}"))
             if execute_match:
                 proto_dir.mkdir(parents=True, exist_ok=True)
                 with open(generated_path, "w", encoding="utf-8") as f:
@@ -88,9 +95,10 @@ class Agent:
                 state["next_step"] = "execute"
             else:
                 # does not have <execute> tag
+                state["messages"].append(HumanMessage(content=get_invalid_generate_prompt()))
                 state["next_step"] = "generate"
 
-            state["messages"].append(AIMessage(content=f"Iteration: {self.code_iteration}, {llm_response.strip()}"))
+            
             return state
 
         def cc_correctness_checker(state: State) -> State:
@@ -115,6 +123,11 @@ class Agent:
                 # Always reload in case of iterative changes
                 tests_module = importlib.import_module("tests.test_serializability")
                 importlib.reload(tests_module)
+                
+                # Reload GeneratedCC to ensure the latest version is used
+                generated_cc_module = importlib.import_module("cc_protocols.generated_cc")
+                importlib.reload(generated_cc_module)
+                
                 suite = unittest.defaultTestLoader.loadTestsFromModule(tests_module)
                 runner = unittest.TextTestRunner(stream=output_stream, verbosity=2)
                 result = runner.run(suite)
@@ -134,8 +147,12 @@ class Agent:
                 feedback = "\n".join(details_lines)
 
                 # Add feedback message for the LLM
-                state["messages"].append(HumanMessage(content=f"<observe>{feedback}</observe>"))
-                state["next_step"] = "correct" if result.wasSuccessful() else "incorrect"
+                if result.wasSuccessful():
+                    state["messages"].append(HumanMessage(content="All tests passed."))
+                    state["next_step"] = "correct"
+                else:
+                    state["messages"].append(HumanMessage(content=get_incorrect_code_prompt(feedback)))
+                    state["next_step"] = "incorrect"
             except Exception as e:
                 err_text = traceback.format_exc()
                 state["messages"].append(HumanMessage(content=f"<observe>Exception while running tests: {e}\n{err_text}</observe>"))
@@ -154,12 +171,17 @@ class Agent:
             pass
 
         workflow_builder = StateGraph(State)
+        workflow_builder.add_node("cc_proposer", cc_proposer)
         workflow_builder.add_node("cc_generator", cc_generator)
         workflow_builder.add_node("cc_correctness_checker", cc_correctness_checker)
         workflow_builder.add_node("cc_performance_evaluator", cc_performance_evaluator)
         workflow_builder.add_node("cc_novelty_evaluator", cc_novelty_evaluator)
 
-        workflow_builder.add_edge(START, "cc_generator")
+        workflow_builder.add_edge(START, "cc_proposer")
+
+        workflow_builder.add_conditional_edges("cc_proposer", lambda state: state["next_step"], {
+            "generate": "cc_generator"
+        })
 
         workflow_builder.add_conditional_edges("cc_generator", lambda state: state["next_step"], {
             "execute": "cc_correctness_checker",

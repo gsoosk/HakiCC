@@ -7,5 +7,4 @@ def get_llm():
     project_id = "gen-lang-client-0385870402"  # Provide your project ID here
     os.environ["GOOGLE_API_KEY"] = gemini_api_key
     os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
-    
     return init_chat_model("gemini-2.5-flash", model_provider="google_genai")
