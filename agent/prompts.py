@@ -66,11 +66,8 @@ def get_generate_prompt() -> str:
 
     Purpose: This step is essential to ground your implementation in the architecture already provided.
 
-    Step 2: Implement the proposed Concurrency Control Protocol
-    Your mission is to implemente the completely new concurrency control protocols. You can fix this protocol based on the feedback provided.
-
-    Your implementation 
-
+    Step 2: Implement the proposed Concurrency Control Protocol. 
+    Your mission is to implement the completely new concurrency control protocols. You can fix this protocol based on the feedback provided.
 
     Make a plan first. The plan should be a numbered list of steps that you will take to solve the task. Be specific and detailed.
     Format your plan as a checklist with empty checkboxes like this:
@@ -99,6 +96,7 @@ def get_generate_prompt() -> str:
         * Your code should be enclosed using "<execute>" tag, for example: <execute> print("Hello World!") </execute>.
         * IMPORTANT: You must end the code block with </execute> tag.
         * the code inside the <execute> tag should be a valid python code. do not include any other text.
+        * do not include any extra text such as "```python" or "```" in the code block.
 
         * Only return the code you newly implemented. Do not return the codebase as it already exists. 
 
@@ -109,10 +107,11 @@ def get_generate_prompt() -> str:
 
         * You can implement your own classes to be used in your concurrency control protocol if needed. 
         * IMPORTANT: do not re-implement any existing classes. You can only import and use them.
+        * Your final implementation should be thread-safe and runnable in a concurrent setting.
 
 
     
-    Your code will be tested afterward by a test harness that will be provided to check if it conforms to the concurrency control principles.
+    Your code will be tested in a concurrent setting afterward by a test harness that will be provided to check if it conforms to the concurrency control principles.
     If it does not, you should modify your code and try again given the feedback provided. 
     If it does, your implementation goes thorough novelty check and performance check and if it does not satisfy the requirements, you should modify your code and try again given the feedback provided.
     The feedback will be provided to you in the <observe> tag.
@@ -129,6 +128,8 @@ def get_incorrect_code_prompt(feedback: str) -> str:
     <observe>
     {feedback}
     </observe>
+    You are just fixing the bug/problem in the code. Do not change the design concurrency control protocol.
+    Follow the initial design, just fix issues that can result in incorrect behavior.
     """
     return prompt
 
@@ -137,11 +138,25 @@ def get_invalid_generate_prompt() -> str:
     prompt = f"""
     Your previous code is invalid. Please generate a new code.
     The code should be enclosed using "<execute>" tag, for example: <execute> print("Hello World!") </execute>.
+    do not include any extra text such as "```python" or "```" in the code block.
     IMPORTANT: You must end the code block with </execute> tag.
     the code inside the <execute> tag should be a valid python code. do not include any other text.
     Only return the code you newly implemented. Do not return the codebase as it already exists. 
     Your final concurrency control protocol class should be named as "GeneratedCC" and it should extend the ConcurrencyControl class.
     You can import required modules from the codebase as follows: 
     from cc_core import ConcurrencyControl, Transaction, CommitResult, TxStatus
+    """
+    return prompt
+
+
+def get_final_report_prompt() -> str:
+    prompt = f"""
+    Please provide a concise final technical report of the implemented concurrency control protocol contained in the following code.
+    Output: 
+    * algorithm overview, read/write/lock or validation strategy, deadlock handling if any, correctness guarantees (e.g., conflict-serializability), complexity and performance notes, assumptions, and limitations.
+    * Code in the following format:
+    ```python
+    code_text
+    ```
     """
     return prompt

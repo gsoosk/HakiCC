@@ -5,3 +5,4 @@ langchain
 langchain_community
 langchain-google-vertexai
 langchain-google-genai
+rich

@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import threading
 import time
 import random
+import traceback
 import unittest
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
@@ -132,6 +133,10 @@ class ConcurrentRunner:
         self._slot_for_tid: Dict[int, int] = {}
         self._slot_lock = threading.Lock()
         self._next_slot = 0
+        # Error propagation
+        self._error = None
+        self._error_tb = None
+        self._error_lock = threading.Lock()
 
     def run(self, workload) -> Tuple[List[Op], Set[int], Set[int]]:
         stop = threading.Event()
@@ -156,26 +161,47 @@ class ConcurrentRunner:
                         self.store.bind_txid(txn.txid)
                         workload(self, txn)
                     except Exception as e:
-                        logger.error(f"Error during transaction processing: {e}")
+                        logger.exception("Error during transaction processing")
+                        with self._error_lock:
+                            if self._error is None:
+                                self._error = e
+                                self._error_tb = traceback.format_exc()
+                                stop.set()
+                        break
                     finally:
                         # Clear binding after workload iteration
                         setattr(self._tls, "txn_txid", None)
                         self.store.bind_txid(-1)
-                except Exception:
+                except Exception as e:
                     # On exception, still update progress to avoid false stalls
                     slot_idx = getattr(self._progress_tls, "slot", None)
                     if slot_idx is not None and 0 <= slot_idx < len(self._progress_slots):
                         self._progress_slots[slot_idx] = time.time()
+                    logger.exception("Unhandled error in worker")
+                    with self._error_lock:
+                        if self._error is None:
+                            self._error = e
+                            self._error_tb = traceback.format_exc()
+                            stop.set()
+                    break
 
         for _ in range(self.num_workers):
             t = threading.Thread(target=worker, daemon=True)
             threads.append(t)
             t.start()
 
-        time.sleep(self.duration_s)
+        # Wait for duration or early-exit on first error
+        deadline = start_time + self.duration_s
+        while time.time() < deadline and not stop.is_set():
+            if self._error is not None:
+                break
+            time.sleep(0.01)
         stop.set()
         for t in threads:
             t.join(timeout=1)
+        # If any worker reported an error, surface it to caller
+        if self._error is not None:
+            raise RuntimeError(f"ConcurrentRunner failed with error: {self._error}\n{self._error_tb or ''}")
         # Filter ops to only those from committed transactions
         with self._ops_lock:
             committed_ops = [op for op in self._ops if op.txid in self._committed]

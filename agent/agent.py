@@ -15,7 +15,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 
 from .llm import get_llm
-from .prompts import get_generate_prompt, get_incorrect_code_prompt, get_invalid_generate_prompt, get_propose_prompt
+from .prompts import get_generate_prompt, get_incorrect_code_prompt, get_invalid_generate_prompt, get_propose_prompt, get_final_report_prompt
 
 
 
@@ -54,12 +54,6 @@ class Agent:
             project_root = Path(__file__).resolve().parent.parent
             proto_dir = project_root / "cc_protocols"
             generated_path = proto_dir / "generated_cc.py"
-
-            # prompt = f"""
-            #         create a hello world program in python
-            #         only return the code, no other text
-            #         Interact with a programming environment and receive the corresponding output within <observe></observe>. Your code should be enclosed using "<execute>" tag, for example: <execute> print("Hello World!") </execute>. IMPORTANT: You must end the code block with </execute> tag.
-            # """
 
             if self.code_iteration == 0: 
                 state["messages"].append(HumanMessage(content=get_generate_prompt()))
@@ -133,14 +127,14 @@ class Agent:
                 result = runner.run(suite)
                 summary = f"Ran {result.testsRun} tests. Failures: {len(result.failures)}. Errors: {len(result.errors)}."
                 details_lines = [summary]
-                if result.failures:
-                    details_lines.append("Failures:")
-                    for case, tb in result.failures:
-                        details_lines.append(f"- {case.id()}\n{tb}")
-                if result.errors:
-                    details_lines.append("Errors:")
-                    for case, tb in result.errors:
-                        details_lines.append(f"- {case.id()}\n{tb}")
+                # if result.failures:
+                #     details_lines.append("Failures:")
+                #     for case, tb in result.failures:
+                #         details_lines.append(f"- {case.id()}\n{tb}")
+                # if result.errors:
+                #     details_lines.append("Errors:")
+                #     for case, tb in result.errors:
+                #         details_lines.append(f"- {case.id()}\n{tb}")
                 full_output = output_stream.getvalue()
                 if full_output.strip():
                     details_lines.append("Output:\n" + full_output)
@@ -165,10 +159,45 @@ class Agent:
 
 
         def cc_performance_evaluator(state: State) -> State:
-            pass
+            return state
 
         def cc_novelty_evaluator(state: State) -> State:
-            pass
+            state["next_step"] = "end"
+            return state
+
+        def cc_final_report(state: State) -> State:
+            # Save the latest generated CC to a new versioned file and ask LLM for a final report
+            project_root = Path(__file__).resolve().parent.parent
+            proto_dir = project_root / "cc_protocols"
+            current_path = proto_dir / "generated_cc.py"
+
+            try:
+                code_text = current_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                code_text = ""
+
+            # Determine next index n for generated_cc_n.py
+            max_idx = 0
+            for p in proto_dir.glob("generated_cc_*.py"):
+                m = re.match(r"generated_cc_(\\d+)\\.py", p.name)
+                if m:
+                    idx = int(m.group(1))
+                    if idx > max_idx:
+                        max_idx = idx
+            next_idx = max_idx + 1
+            new_path = proto_dir / f"generated_cc_{next_idx}.py"
+
+            if code_text:
+                proto_dir.mkdir(parents=True, exist_ok=True)
+                new_path.write_text(code_text, encoding="utf-8")
+
+            # Ask LLM for a final technical report of the protocol
+            report_prompt = get_final_report_prompt()
+            state["messages"].append(HumanMessage(content=report_prompt))
+            llm_response = str(self.llm.invoke(state["messages"]).content)
+            state["messages"].append(AIMessage(content=llm_response))
+            state["next_step"] = "end"
+            return state
 
         workflow_builder = StateGraph(State)
         workflow_builder.add_node("cc_proposer", cc_proposer)
@@ -176,12 +205,11 @@ class Agent:
         workflow_builder.add_node("cc_correctness_checker", cc_correctness_checker)
         workflow_builder.add_node("cc_performance_evaluator", cc_performance_evaluator)
         workflow_builder.add_node("cc_novelty_evaluator", cc_novelty_evaluator)
+        workflow_builder.add_node("cc_final_report", cc_final_report)
 
         workflow_builder.add_edge(START, "cc_proposer")
 
-        workflow_builder.add_conditional_edges("cc_proposer", lambda state: state["next_step"], {
-            "generate": "cc_generator"
-        })
+        workflow_builder.add_edge("cc_proposer", "cc_generator")
 
         workflow_builder.add_conditional_edges("cc_generator", lambda state: state["next_step"], {
             "execute": "cc_correctness_checker",
@@ -192,9 +220,11 @@ class Agent:
             "incorrect": "cc_generator",
         })
         workflow_builder.add_edge("cc_performance_evaluator", "cc_novelty_evaluator")
-        workflow_builder.add_edge("cc_novelty_evaluator", END)
-
-
+        workflow_builder.add_conditional_edges("cc_novelty_evaluator", lambda state: state["next_step"], {
+            "improve": "cc_proposer",
+            "end": "cc_final_report",
+        })
+        workflow_builder.add_edge("cc_final_report", END)
 
         return workflow_builder.compile()
 
