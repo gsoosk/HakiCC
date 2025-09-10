@@ -14,7 +14,9 @@ from versioned_store import VersionedKVStore
 # 2. put(writes: Dict[str, Any], commit_ts: int) -> None: This method adds new versions of keys to the store at a specified commit timestamp (commit_ts).
 #    It takes a dictionary of key-value pairs to be written and appends them as new versions in the store.
 # These methods are essential for implementing concurrency control mechanisms as they allow transactions to read consistent snapshots and commit changes atomically.
-
+# IMPORTANT: YOU DO NOT NEED TO IMPLEMENT THE VersionedKVStore class. It is already implemented and could be imported. Just improt it and  use it.
+# Import it as follows:
+# from versioned_store import VersionedKVStore
 
 
 
@@ -29,7 +31,7 @@ class TxStatus(Enum):
 @dataclass
 class Transaction:
     """Per-transaction state shared with the CC algorithm."""
-    txid: int
+    txid: int # this should be unique for each transaction. 
     start_ts: int
     status: TxStatus = TxStatus.ACTIVE
     read_set: Dict[str, int] = field(default_factory=dict)   # key -> version begin_ts read

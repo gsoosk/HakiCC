@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional, Set
+import threading
 from cc_core import ConcurrencyControl, Transaction, CommitResult, TxStatus
 from versioned_store import VersionedKVStore
 
@@ -37,6 +38,7 @@ class Strict2PL(ConcurrencyControl):
         self._time = 0
         # Global lock table: key -> {holder_txids: mode}
         self._locks: Dict[str, Dict[int, LockMode]] = {}
+        self._locks_lock = threading.RLock()
 
     def _now(self) -> int:
         return self._time
@@ -56,51 +58,54 @@ class Strict2PL(ConcurrencyControl):
         Check if txid can acquire lock in given mode.
         Uses simple wait-die scheme: if younger transaction would wait for older, abort instead.
         """
-        holders = self._locks.get(key, {})
-        
-        if not holders:
-            return True  # No current holders
-            
-        if txid in holders:
-            # Already hold lock - check if upgrade needed
-            return mode == holders[txid] or (
-                mode == LockMode.EXCLUSIVE and 
-                holders[txid] == LockMode.SHARED and
-                len(holders) == 1
-            )
-            
-        # Check other holders
-        for holder_id, holder_mode in holders.items():
-            # Can share read locks
-            if mode == LockMode.SHARED and holder_mode == LockMode.SHARED:
-                continue
-            # Otherwise, conflict - use wait-die: abort if younger
-            if txid > holder_id:  # Higher txid means younger
-                return False
-        return True
+        with self._locks_lock:
+            holders = self._locks.get(key, {})
+
+            if not holders:
+                return True  # No current holders
+
+            if txid in holders:
+                # Already hold lock - check if upgrade needed
+                return mode == holders[txid] or (
+                    mode == LockMode.EXCLUSIVE and 
+                    holders[txid] == LockMode.SHARED and
+                    len(holders) == 1
+                )
+
+            # Check other holders
+            for holder_id, holder_mode in list(holders.items()):
+                # Can share read locks
+                if mode == LockMode.SHARED and holder_mode == LockMode.SHARED:
+                    continue
+                # Otherwise, conflict - use wait-die: abort if younger
+                if txid > holder_id:  # Higher txid means younger
+                    return False
+            return True
 
     def _acquire_lock(self, txn: Strict2PLTransaction, key: str, mode: LockMode) -> bool:
         """
         Try to acquire lock in given mode.
         Returns True if acquired, False if should abort.
         """
-        if not self._can_acquire_lock(txn.txid, key, mode):
-            return False
-            
-        holders = self._locks.setdefault(key, {})
-        holders[txn.txid] = mode
-        txn.held_locks.add(key)
-        txn.lock_mode[key] = mode
-        return True
+        with self._locks_lock:
+            if not self._can_acquire_lock(txn.txid, key, mode):
+                return False
+
+            holders = self._locks.setdefault(key, {})
+            holders[txn.txid] = mode
+            txn.held_locks.add(key)
+            txn.lock_mode[key] = mode
+            return True
 
     def _release_all_locks(self, txn: Strict2PLTransaction) -> None:
         """Release all locks held by transaction."""
-        for key in txn.held_locks:
-            holders = self._locks.get(key, {})
-            if txn.txid in holders:
-                del holders[txn.txid]
-            if not holders:
-                del self._locks[key]
+        with self._locks_lock:
+            for key in list(txn.held_locks):
+                holders = self._locks.get(key, {})
+                if txn.txid in holders:
+                    del holders[txn.txid]
+                if not holders and key in self._locks:
+                    del self._locks[key]
         txn.held_locks.clear()
         txn.lock_mode.clear()
 

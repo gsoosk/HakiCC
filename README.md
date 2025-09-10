@@ -1,77 +1,68 @@
 # LLM-Generated Concurrency Control Playground
 
-This repository provides a minimal, pluggable core (`cc_core.py`) that lets you evaluate different concurrency control (CC) algorithms. Your LLM will generate implementations that conform to the `ConcurrencyControl` interface.
+This repository provides a minimal, pluggable core (`cc_core.py`) and an agentic workflow that lets an LLM propose, generate, test, and finalize concurrency control (CC) algorithms implementing the `ConcurrencyControl` interface.
 
 ## Layout
 
-- `cc_core.py`: Core versioned store and plugin interface
-- `cc_protocols/`: CC plugin implementations
-  - `template.py`: Minimal template for LLM-generated CC
-  - `read_committed.py`: Simple baseline CC (Read Committed + RYOW)
-- `demo.py`: Small runnable demo
+- `cc_core.py`: CC interface and shared transaction types
+- `versioned_store.py`: In-memory multiversion KV store used by CC implementations
+- `cc_protocols/`: CC implementations and artifacts
+  - `strict2pl.py`, `read_committed.py`, `occ.py`, `template.py`
+  - `generated_cc.py`: latest LLM-generated implementation (overwritten per iteration)
+  - `generated_cc_n.py`: archived snapshots produced by the final report node
+- `tests/test_serializability.py`: correctness tests and concurrent workload runner
+- `agent/`: agent workflow, prompts, and LLM wiring
+  - `agent.py`: builds the workflow graph
+  - `prompts.py`: system/user prompts (includes `get_final_report_prompt`)
+  - `llm.py`: model configuration
+- `run_agent.py`: runs the workflow and streams messages; emits `workflow_diagram.png`
 
 ## Quick start
 
 ```bash
-python3 demo.py
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+python run_agent.py
 ```
 
-Expected output shows commits and reads under the baseline policy.
+This will:
+- Build and render the workflow diagram as `workflow_diagram.png`
+- Stream agent messages while iterating on a CC implementation
+- Run tests automatically and provide feedback to the LLM
+- On completion, produce a final report and archive the generated CC
 
-## Writing a new CC policy (for the LLM)
+## Workflow overview
 
-Create a new module under `cc_protocols/` implementing `ConcurrencyControl`:
+1. cc_proposer: LLM proposes a CC design.
+2. cc_generator: LLM generates code inside `<execute>...</execute>`; saved to `cc_protocols/generated_cc.py`.
+3. cc_correctness_checker: Runs `tests/test_serializability.py`; feeds results back to the LLM.
+4. cc_performance_evaluator: Placeholder for perf checks.
+5. cc_novelty_evaluator: Decides whether to improve or end.
+6. cc_final_report: When ending, saves an artifact copy as `generated_cc_n.py` and requests a final technical report from the LLM.
 
-```python
-from typing import Any, Optional
-from cc_core import ConcurrencyControl, Transaction, CommitResult, VersionedKVStore
+## Artifacts
 
-class MyCC(ConcurrencyControl):
-    def __init__(self) -> None:
-        # manage your own txid/time if needed
-        self._next_txid = 0
-        self._time = 0
+- Latest implementation: `cc_protocols/generated_cc.py` (overwritten each generation).
+- Archived snapshots: `cc_protocols/generated_cc_1.py`, `cc_protocols/generated_cc_2.py`, ... (created by the final report node).
+- Workflow visualization: `workflow_diagram.png`.
 
-    def begin(self, store: VersionedKVStore) -> Transaction:
-        self._next_txid += 1
-        self._time += 1
-        return Transaction(txid=self._next_txid, start_ts=self._time)
+## Running tests manually
 
-    def read(self, txn: Transaction, key: str, store: VersionedKVStore) -> Optional[Any]:
-        # visibility logic
-        return store.get(key, txn.start_ts)
+The test suite can be run directly:
 
-    def write(self, txn: Transaction, key: str, value: Any, store: VersionedKVStore) -> None:
-        # write intent logic
-        txn.write_set[key] = value
-
-    def commit(self, txn: Transaction, store: VersionedKVStore) -> CommitResult:
-        # validation/serialization logic
-        self._time += 1
-        store.put(txn.write_set, self._time)
-        return CommitResult(ok=True, commit_ts=self._time)
-
-    def rollback(self, txn: Transaction, store: VersionedKVStore) -> None:
-        # release state
-        txn.meta.clear()
-        txn.write_set.clear()
+```bash
+export CC_IMPL=GeneratedCC  # or Strict2PL / ReadCommitted / OCC
+python -m unittest -v tests.test_serializability
 ```
 
-Use it directly with a store:
+## Concurrent runner behavior
 
-```python
-from cc_core import VersionedKVStore
-from cc_protocols.my_cc import MyCC
-
-store = VersionedKVStore()
-cc = MyCC()
-
-txn = cc.begin(store)
-cc.write(txn, "k", 1, store)
-res = cc.commit(txn, store)
-```
+The concurrent workload runner inside `tests/test_serializability.py` stops all workers on the first exception and raises a `RuntimeError` with a traceback. This provides immediate feedback for failures rather than hanging or silently continuing.
 
 ## Notes
 
-- Only CC exposes `read`/`write`. The store uses `get`/`put` to avoid naming confusion.
-- Baseline `ReadCommitted` is intentionally simple; adapt `template.py` for more advanced protocols (OCC, SI, 2PL, etc.).
+- CC implementations call `store.get`/`store.put`; do not modify the store internals.
+- Use `template.py` as a starting point for new protocols (OCC, SI, 2PL, etc.).
+- Prompts for generation, correction, and final reporting live in `agent/prompts.py`.
