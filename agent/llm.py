@@ -3,8 +3,6 @@ import os
 
 def get_llm():
     # return init_chat_model(model="gpt-4o-mini")
-    gemini_api_key = "AIzaSyBGYxEjDTdKfi15PtIyimpWJ-2wlYsxOow"
-    project_id = "gen-lang-client-0385870402"  # Provide your project ID here
-    os.environ["GOOGLE_API_KEY"] = gemini_api_key
-    os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
+    gemini_api_key = os.getenv("GOOGLE_API_KEY", "default_api_key")
+    project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "default_project_id")
     return init_chat_model("gemini-2.5-pro", model_provider="google_genai")

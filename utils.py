@@ -10,7 +10,9 @@ class Utils:
     def pretty_print(message, printout=True):
         def format_content(content):
             return (content.replace("<execute>", "```python")
-                           .replace("</execute>", "```"))
+                           .replace("</execute>", "```")
+                           .replace("<observe>", "```")
+                           .replace("</observe>", "```"))
 
         if isinstance(message, tuple):
             m = message[0]

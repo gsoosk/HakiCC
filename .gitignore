@@ -180,5 +180,5 @@ pyrightconfig.json
 
 workflow_diagram.png
 cc_protocols/generated_cc.py
-
+cc_protocols/final_generations/*
 workflow_diagram.png

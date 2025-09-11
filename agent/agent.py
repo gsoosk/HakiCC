@@ -54,7 +54,6 @@ class Agent:
             project_root = Path(__file__).resolve().parent.parent
             proto_dir = project_root / "cc_protocols"
             generated_path = proto_dir / "generated_cc.py"
-
             if self.code_iteration == 0: 
                 state["messages"].append(HumanMessage(content=get_generate_prompt()))
 
@@ -168,8 +167,8 @@ class Agent:
         def cc_final_report(state: State) -> State:
             # Save the latest generated CC to a new versioned file and ask LLM for a final report
             project_root = Path(__file__).resolve().parent.parent
-            proto_dir = project_root / "cc_protocols"
-            current_path = proto_dir / "generated_cc.py"
+            final_gen_dir = project_root / "cc_protocols" / "final_generations"
+            current_path = project_root / "cc_protocols" / "generated_cc.py"
 
             try:
                 code_text = current_path.read_text(encoding="utf-8")
@@ -178,27 +177,35 @@ class Agent:
 
             # Determine next index n for generated_cc_n.py
             max_idx = 0
-            for p in proto_dir.glob("generated_cc_*.py"):
-                m = re.match(r"generated_cc_(\\d+)\\.py", p.name)
+            for p in final_gen_dir.glob("generated_cc_*.py"):
+                m = re.match(r"generated_cc_(\d+)\.py", p.name)
                 if m:
                     idx = int(m.group(1))
                     if idx > max_idx:
                         max_idx = idx
             next_idx = max_idx + 1
-            new_path = proto_dir / f"generated_cc_{next_idx}.py"
-
-            if code_text:
-                proto_dir.mkdir(parents=True, exist_ok=True)
-                new_path.write_text(code_text, encoding="utf-8")
+            new_path = final_gen_dir / f"generated_cc_{next_idx}.py"
 
             # Ask LLM for a final technical report of the protocol
             report_prompt = get_final_report_prompt()
             state["messages"].append(HumanMessage(content=report_prompt))
             llm_response = str(self.llm.invoke(state["messages"]).content)
+            # Add the LLM response as a comment at the beginning of the generated file
+            if code_text:
+                # Remove code within <execute>...</execute> or '''python''' blocks from the LLM response
+                cleaned_llm_response = re.sub(r"<execute>.*?</execute>", "", llm_response, flags=re.DOTALL)
+                cleaned_llm_response = re.sub(r"```python.*?```", "", cleaned_llm_response, flags=re.DOTALL)
+                
+                # Ensure there are no ''' characters in the cleaned LLM response
+                cleaned_llm_response = cleaned_llm_response.replace("'''", "")
+
+                llm_comment = f"''' LLM Response:\n{cleaned_llm_response}\n'''\n\n"
+                final_gen_dir.mkdir(parents=True, exist_ok=True)
+                new_path.write_text(llm_comment + code_text, encoding="utf-8")
+        
             state["messages"].append(AIMessage(content=llm_response))
             state["next_step"] = "end"
             return state
-
         workflow_builder = StateGraph(State)
         workflow_builder.add_node("cc_proposer", cc_proposer)
         workflow_builder.add_node("cc_generator", cc_generator)

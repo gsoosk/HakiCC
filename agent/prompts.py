@@ -151,12 +151,9 @@ def get_invalid_generate_prompt() -> str:
 
 def get_final_report_prompt() -> str:
     prompt = f"""
-    Please provide a concise final technical report of the implemented concurrency control protocol contained in the following code.
+    Please provide a concise final technical report of the implemented concurrency control protocol contained in the following code. 
+    Only output the report, do not include any other text.
     Output: 
     * algorithm overview, read/write/lock or validation strategy, deadlock handling if any, correctness guarantees (e.g., conflict-serializability), complexity and performance notes, assumptions, and limitations.
-    * Code in the following format:
-    ```python
-    code_text
-    ```
     """
     return prompt
