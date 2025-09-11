@@ -15,13 +15,18 @@ from langgraph.checkpoint.memory import MemorySaver
 
 
 from .llm import get_llm
-from .prompts import get_generate_prompt, get_incorrect_code_prompt, get_invalid_generate_prompt, get_propose_prompt, get_final_report_prompt
+from .prompts import get_generate_prompt, get_incorrect_code_prompt, get_invalid_generate_prompt, get_propose_prompt, get_final_report_prompt, get_novelty_prompt
 
 
 
 class State(TypedDict):
     messages: Annotated[list[str], add_messages]
     next_step: str | None
+    code_iteration: int
+
+    current_protocol_proposal: str
+    current_code: str
+    novelty_result: str
 
 
 class Agent:
@@ -29,9 +34,9 @@ class Agent:
     def __init__(self) -> None:
         self.workflow = self.build_workflow()
         self.llm = get_llm()
-        self.code_iteration = 0
         self.checkpointer = MemorySaver()
         self.workflow.checkpointer = self.checkpointer
+        self.novelty_llm = get_llm()
 
 
 
@@ -41,23 +46,55 @@ class Agent:
 
 
 
+    def trim_fix_loop_messages(self, messages: list, max_fix_messages: int = 12) -> list:
+        # trim the message history within the fix loop to a fixed-size window, preserving the preamble before the first fix prompt
+        if not messages or max_fix_messages <= 0:
+            return messages
+
+        sentinel_substrings = (
+            "Your previous code is incorrect.",
+            "Your previous code is invalid.",
+        )
+
+        fix_start_index = None
+        for idx, msg in enumerate(messages):
+            content = getattr(msg, "content", "") or ""
+            if any(s in content for s in sentinel_substrings):
+                fix_start_index = idx
+                break
+
+        if fix_start_index is None:
+            return messages
+
+        # Keep the full preamble, trim only the fix-loop segment
+        head_messages = messages[:fix_start_index]
+        fix_segment = messages[fix_start_index:]
+        if len(fix_segment) <= max_fix_messages:
+            return messages
+
+        return head_messages + fix_segment[-max_fix_messages:]
+
+
     def build_workflow(self):
         def cc_proposer(state: State) -> State:
             prompt = get_propose_prompt()
             state["messages"].append(HumanMessage(content=prompt))
             llm_response = str(self.llm.invoke(state["messages"]).content)
+            state["current_protocol_proposal"] = llm_response
             state["messages"].append(AIMessage(content=llm_response))
             state["next_step"] = "generate"
+            state["code_iteration"] = 0
             return state
 
         def cc_generator(state: State) -> State:
             project_root = Path(__file__).resolve().parent.parent
             proto_dir = project_root / "cc_protocols"
             generated_path = proto_dir / "generated_cc.py"
-            if self.code_iteration == 0: 
+            if state["code_iteration"] == 0: 
                 state["messages"].append(HumanMessage(content=get_generate_prompt()))
 
 
+            state["messages"] = self.trim_fix_loop_messages(state["messages"], max_fix_messages=5)
             llm_response = str(self.llm.invoke(state["messages"]).content)
 
             if "<execute>" in llm_response and "</execute>" not in llm_response:
@@ -68,8 +105,9 @@ class Agent:
 
             execute_match = re.search(r"<execute>(.*?)</execute>", llm_response, re.DOTALL)
             execute_code = execute_match.group(1) if execute_match else ""
-            self.code_iteration += 1
-            state["messages"].append(AIMessage(content=f"Iteration: {self.code_iteration}, {llm_response.strip()}"))
+
+            state["code_iteration"] += 1    
+            state["messages"].append(AIMessage(content=f"Iteration: {state['code_iteration']}, {llm_response.strip()}"))
             if execute_match:
                 proto_dir.mkdir(parents=True, exist_ok=True)
                 with open(generated_path, "w", encoding="utf-8") as f:
@@ -126,14 +164,6 @@ class Agent:
                 result = runner.run(suite)
                 summary = f"Ran {result.testsRun} tests. Failures: {len(result.failures)}. Errors: {len(result.errors)}."
                 details_lines = [summary]
-                # if result.failures:
-                #     details_lines.append("Failures:")
-                #     for case, tb in result.failures:
-                #         details_lines.append(f"- {case.id()}\n{tb}")
-                # if result.errors:
-                #     details_lines.append("Errors:")
-                #     for case, tb in result.errors:
-                #         details_lines.append(f"- {case.id()}\n{tb}")
                 full_output = output_stream.getvalue()
                 if full_output.strip():
                     details_lines.append("Output:\n" + full_output)
@@ -143,6 +173,7 @@ class Agent:
                 if result.wasSuccessful():
                     state["messages"].append(HumanMessage(content="All tests passed."))
                     state["next_step"] = "correct"
+                    state["current_code"] = generated_path.read_text(encoding="utf-8")
                 else:
                     state["messages"].append(HumanMessage(content=get_incorrect_code_prompt(feedback)))
                     state["next_step"] = "incorrect"
@@ -161,6 +192,9 @@ class Agent:
             return state
 
         def cc_novelty_evaluator(state: State) -> State:
+            prompt = get_novelty_prompt(state["current_code"], state["current_protocol_proposal"])
+            llm_response = str(self.novelty_llm.invoke(prompt).content)
+            state["novelty_result"] = llm_response
             state["next_step"] = "end"
             return state
 
@@ -199,13 +233,14 @@ class Agent:
                 # Ensure there are no ''' characters in the cleaned LLM response
                 cleaned_llm_response = cleaned_llm_response.replace("'''", "")
 
-                llm_comment = f"''' LLM Response:\n{cleaned_llm_response}\n'''\n\n"
+                llm_comment = f"''' Technical Report:\n{cleaned_llm_response}\n'''\n\n"
+                novelty_comment = f"''' Novelty Result:\n{state['novelty_result']}\n'''\n\n"
                 final_gen_dir.mkdir(parents=True, exist_ok=True)
-                new_path.write_text(llm_comment + code_text, encoding="utf-8")
-        
+                new_path.write_text(llm_comment + novelty_comment + code_text, encoding="utf-8")
             state["messages"].append(AIMessage(content=llm_response))
             state["next_step"] = "end"
             return state
+        
         workflow_builder = StateGraph(State)
         workflow_builder.add_node("cc_proposer", cc_proposer)
         workflow_builder.add_node("cc_generator", cc_generator)
