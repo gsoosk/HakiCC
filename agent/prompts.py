@@ -56,9 +56,9 @@ def get_generate_prompt() -> str:
     Step 1: Understand the codebase
     The codebase is as follows:
     file: ../cc_core.py
-    '''python
+    ```python
     {codebase}
-    '''
+    ```
     You can import required modules from the codebase as follows: 
     from cc_core import ConcurrencyControl, Transaction, CommitResult, TxStatus
 

@@ -94,7 +94,7 @@ class Agent:
                 state["messages"].append(HumanMessage(content=get_generate_prompt()))
 
 
-            state["messages"] = self.trim_fix_loop_messages(state["messages"], max_fix_messages=5)
+            state["messages"] = self.trim_fix_loop_messages(state["messages"], max_fix_messages=6)
             llm_response = str(self.llm.invoke(state["messages"]).content)
 
             if "<execute>" in llm_response and "</execute>" not in llm_response:
