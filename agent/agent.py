@@ -238,6 +238,7 @@ class Agent:
                 final_gen_dir.mkdir(parents=True, exist_ok=True)
                 new_path.write_text(llm_comment + novelty_comment + code_text, encoding="utf-8")
             state["messages"].append(AIMessage(content=llm_response))
+            state["messages"].append(AIMessage(content=f'''Novelty Result:\n```json\n{state["novelty_result"]}\n```'''))
             state["next_step"] = "end"
             return state
         

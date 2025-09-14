@@ -1,10 +1,13 @@
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
+import inspect
 
 import streamlit as st
+from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+from streamlit.delta_generator import DeltaGenerator
 from langchain_core.messages import HumanMessage, AIMessage
-
+from langchain_core.callbacks.base import BaseCallbackHandler
 
 # Ensure project root is on sys.path for package imports when run via Streamlit
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -13,15 +16,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from agent.agent import Agent, State  # noqa: E402
 
-
 st.set_page_config(page_title="Agent Workflow Runner", page_icon="🤖", layout="wide")
-
 
 @st.cache_resource(show_spinner=False)
 def get_workflow():
     agent = Agent()
     return agent.get_workflow()
-
 
 def to_role(message: Any) -> str:
     mtype = getattr(message, "type", "")
@@ -31,7 +31,6 @@ def to_role(message: Any) -> str:
         return "assistant"
     return "system"
 
-
 def format_content_for_markdown(content: str) -> str:
     # Match console pretty-printer: render special tags as fenced blocks
     return (
@@ -40,7 +39,6 @@ def format_content_for_markdown(content: str) -> str:
         .replace("<observe>", "```")
         .replace("</observe>", "```")
     )
-
 
 def get_message_text(message: Any) -> str:
     raw = getattr(message, "content", "")
@@ -57,7 +55,6 @@ def get_message_text(message: Any) -> str:
         raw_text = str(raw)
     return format_content_for_markdown(raw_text)
 
-
 def get_message_plain_text(message: Any) -> str:
     raw = getattr(message, "content", "")
     if isinstance(raw, list):
@@ -71,6 +68,68 @@ def get_message_plain_text(message: Any) -> str:
         return "\n".join([p for p in parts if p]) or str(raw)
     return str(raw)
 
+def get_streamlit_cb(parent_container: DeltaGenerator) -> BaseCallbackHandler:
+    class StreamHandler(BaseCallbackHandler):
+        def __init__(self, container: DeltaGenerator, initial_text: str = ""):
+            self.parent_container = container
+            self.ai_container = None
+            self.token_placeholder = None
+            self.text = initial_text
+
+        def reset_containers(self) -> None:
+
+            self.ai_container = self.parent_container.chat_message("assistant")
+            self.token_placeholder = self.ai_container.empty()
+            self.text = ""
+
+        def on_chat_model_start(self, serialized, messages, **kwargs) -> None:
+            # Render the latest human message immediately before token streaming begins
+            try:
+                convo = messages[-1] if messages else []
+                last_human = None
+                human_messages = []
+                for msg in reversed(convo):
+                    if getattr(msg, "type", "") == "ai":
+                        break
+                    if getattr(msg, "type", "") == "human":
+                        human_messages.append(msg)
+                
+                for human_msg in reversed(human_messages):
+                    human_text = get_message_plain_text(human_msg)
+                    h = self.parent_container.chat_message("user")
+                    h.text(human_text)
+
+                
+                self.reset_containers()
+            except Exception:
+                pass
+
+        def on_llm_new_token(self, token: str, **kwargs) -> None:
+            if self.ai_container is None:
+                self.reset_containers()
+            
+            self.text += token
+            self.text = format_content_for_markdown(self.text)
+            self.token_placeholder.write(self.text)
+        
+    fn_return_type = TypeVar('fn_return_type')
+
+    def add_streamlit_context(fn: Callable[..., fn_return_type]) -> Callable[..., fn_return_type]:
+        ctx = get_script_run_ctx()
+
+        def wrapper(*args, **kwargs) -> fn_return_type:
+            add_script_run_ctx(ctx=ctx)
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    st_cb = StreamHandler(parent_container)
+
+    for method_name, method_func in inspect.getmembers(st_cb, predicate=inspect.ismethod):
+        if method_name.startswith('on_'):
+            setattr(st_cb, method_name, add_streamlit_context(method_func))
+
+    return st_cb
 
 def stream_run() -> None:
     workflow = get_workflow()
@@ -79,28 +138,17 @@ def stream_run() -> None:
 
     printed_messages = 0
     chat_container = st.container()
+    streamlit_cb = get_streamlit_cb(chat_container)
+    config["callbacks"] = [streamlit_cb]
 
     with st.status("Running workflow…", expanded=True) as status:
-        for chunk in workflow.stream(init_state, stream_mode="values", config=config):
-            messages = chunk.get("messages", [])
-            if not isinstance(messages, list):
+        for mode, chunk in workflow.stream(init_state, stream_mode=["values", "messages"], config=config):
+            if mode == "messages":
                 continue
-            if len(messages) > printed_messages:
-                new_messages = messages[printed_messages:]
-                for m in new_messages:
-                    role = to_role(m)
-                    if role == "user":
-                        with chat_container.chat_message("user"):
-                            st.text(get_message_plain_text(m))
-                    else:
-                        with chat_container.chat_message(role):
-                            st.markdown(get_message_text(m))
-                printed_messages = len(messages)
         status.update(label="Workflow completed", state="complete")
 
-
-st.title("Agent Workflow Runner")
-st.write("Click the button to run the workflow from the initial state and stream messages.")
+st.title("Concurrency Control Proposer Workflow Runner")
+st.write("Click the button to run the workflow. This will generate a new concurrency control protocol.")
 
 col1, col2 = st.columns([1, 3])
 with col1:
@@ -110,5 +158,3 @@ with col2:
 
 if run_clicked:
     stream_run()
-
-

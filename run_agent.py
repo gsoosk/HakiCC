@@ -2,7 +2,6 @@ from agent.agent import Agent
 from langgraph.graph import StateGraph
 from agent.agent import State
 from utils import Utils
-
 agent = Agent()
 workflow = agent.get_workflow()
 # workflow.get_graph().print_ascii()
