@@ -77,7 +77,7 @@ def get_streamlit_cb(parent_container: DeltaGenerator) -> BaseCallbackHandler:
             self.text = initial_text
 
         def reset_containers(self) -> None:
-
+            print("reset_containers")
             self.ai_container = self.parent_container.chat_message("assistant")
             self.token_placeholder = self.ai_container.empty()
             self.text = ""
@@ -111,6 +111,7 @@ def get_streamlit_cb(parent_container: DeltaGenerator) -> BaseCallbackHandler:
             self.text += token
             self.text = format_content_for_markdown(self.text)
             self.token_placeholder.write(self.text)
+
         
     fn_return_type = TypeVar('fn_return_type')
 
