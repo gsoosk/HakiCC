@@ -25,6 +25,7 @@ def get_propose_prompt() -> str:
     - Clearly define: metadata maintained, read/write visibility rule, commit rule, conflict handling, abort conditions
     - Explain why it can ensure serializability or a chosen isolation level
     - Discuss expected trade-offs (throughput, abort rate, latency) and workloads it suits
+    - DO NOT repeat previous proposals.
 
     Output Format:
     - Provide a concise name and a 5-10 bullet point design spec

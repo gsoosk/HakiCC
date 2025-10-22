@@ -74,12 +74,37 @@ class Agent:
 
         return head_messages + fix_segment[-max_fix_messages:]
 
+    def get_previous_proposals(self) -> str:
+        previous_proposals = "Previous Proposals:\n"
+        project_root = Path(__file__).resolve().parent.parent
+        final_gen_dir = project_root / "cc_protocols" / "final_generations"
+        for p in final_gen_dir.glob("generated_cc_*.py"):
+            m = re.match(r"generated_cc_(\d+)\.py", p.name)
+            if m:
+                idx = int(m.group(1))
+                content = p.read_text(encoding="utf-8")
+                # Extract the text between "''' Technical Report:" and the next "'''" from the file content
+                tech_report = ""
+                tech_report_start = content.find("''' Technical Report:")
+                if tech_report_start != -1:
+                    tech_report_start += len("''' Technical Report:")
+                    tech_report_end = content.find("'''", tech_report_start)
+                    if tech_report_end != -1:
+                        tech_report = content[tech_report_start:tech_report_end].strip()
+                previous_proposals += f"{idx}. {tech_report}\n"
+        return previous_proposals
 
     def build_workflow(self):
         def cc_proposer(state: State) -> State:
+            # reset previous messages and provide previous proposals
+            # state["messages"] = Annotated[list[str], add_messages]
+            state["messages"].clear()
+
+            previous_proposals = self.get_previous_proposals()
             prompt = get_propose_prompt()
+
             state["messages"].append(HumanMessage(content=prompt))
-            llm_response = str(self.llm.invoke(state["messages"]).content)
+            llm_response = str(self.llm.invoke(state["messages"] + [HumanMessage(content=previous_proposals)]).content )
             state["current_protocol_proposal"] = llm_response
             state["messages"].append(AIMessage(content=llm_response))
             state["next_step"] = "generate"
