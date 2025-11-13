@@ -15,7 +15,8 @@ from langgraph.checkpoint.memory import MemorySaver
 
 
 from .llm import get_llm
-from .prompts import get_generate_prompt, get_incorrect_code_prompt, get_invalid_generate_prompt, get_propose_prompt, get_final_report_prompt, get_novelty_prompt
+from .prompts import get_generate_prompt, get_incorrect_code_prompt, get_invalid_generate_prompt, get_propose_prompt, get_final_report_prompt, get_novelty_prompt, get_propose_prompt_with_transactions
+from utils import Utils
 
 
 
@@ -31,12 +32,18 @@ class State(TypedDict):
 
 class Agent:
 
-    def __init__(self) -> None:
+    def __init__(self, inspiration_pdf_path: str | None = None, inspiration_text: str | None = None) -> None:
         self.workflow = self.build_workflow()
         self.llm = get_llm()
         self.checkpointer = MemorySaver()
         self.workflow.checkpointer = self.checkpointer
         self.novelty_llm = get_llm()
+        if inspiration_text:
+            self.inspiration_source_text = inspiration_text
+        elif inspiration_pdf_path:
+            self.inspiration_source_text = Utils.extract_text_from_pdf_path(inspiration_pdf_path, max_chars=120000)
+        else:
+            self.inspiration_source_text = None
 
 
 
@@ -98,10 +105,20 @@ class Agent:
         def cc_proposer(state: State) -> State:
             # reset previous messages and provide previous proposals
             # state["messages"] = Annotated[list[str], add_messages]
-            state["messages"].clear()
+            # state["messages"].clear()
 
             previous_proposals = self.get_previous_proposals()
-            prompt = get_propose_prompt()
+            # Prepare an LLM summary (<=5000 chars) of any provided inspiration text
+            inspiration_summary = None
+            if getattr(self, "inspiration_source_text", None):
+                try:
+                    inspiration_summary = self.summarize_for_prompt(self.inspiration_source_text, max_chars=5000)
+                except Exception:
+                    inspiration_summary = None
+
+            # prompt = get_propose_prompt(inspiration_text=inspiration_summary)
+            prompt = get_propose_prompt_with_transactions([], inspiration_text=inspiration_summary)
+
 
             state["messages"].append(HumanMessage(content=prompt))
             llm_response = str(self.llm.invoke(state["messages"] + [HumanMessage(content=previous_proposals)]).content )
@@ -295,6 +312,21 @@ class Agent:
         workflow_builder.add_edge("cc_final_report", END)
 
         return workflow_builder.compile()
+
+    def summarize_for_prompt(self, text: str, max_chars: int = 5000) -> str:
+        if not text:
+            return ""
+        instruction = (
+            f"Summarize the following academic text into <= {max_chars} characters. "
+            "Emphasize ideas relevant to database concurrency control, isolation, transaction processing, ordering, locks/versions, validation, scheduling, and conflict handling. "
+            "Return plain text only (no markdown code blocks)."
+        )
+        prompt = f"{instruction}\n\n<text>\n{text}\n</text>"
+        try:
+            response = str(self.llm.invoke([HumanMessage(content=prompt)]).content)
+        except Exception:
+            response = text
+        return response[:max_chars]
 
 
 

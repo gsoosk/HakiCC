@@ -2,12 +2,15 @@ from agent.agent import Agent
 from langgraph.graph import StateGraph
 from agent.agent import State
 from utils import Utils
-agent = Agent()
-workflow = agent.get_workflow()
-# workflow.get_graph().print_ascii()
-workflow.get_graph().draw_mermaid_png(max_retries=2)
-with open("workflow_diagram.png", "wb") as f:
-    f.write(workflow.get_graph().draw_mermaid_png(max_retries=2))
+import argparse
+
+def get_workflow(inspiration_pdf: str | None = None) -> StateGraph:
+    agent = Agent(inspiration_pdf_path=inspiration_pdf)
+    workflow = agent.get_workflow()
+    workflow.get_graph().draw_mermaid_png(max_retries=2)
+    with open("workflow_diagram.png", "wb") as f:
+        f.write(workflow.get_graph().draw_mermaid_png(max_retries=2))
+    return workflow
 
 
 
@@ -20,6 +23,7 @@ def stream_workflow_updates(workflow: StateGraph):
 
     # TODO: fix interface for correct streaming of messages
     for chunk in workflow.stream(init_state, stream_mode="values", config=config):
+        # print(chunk)
         total_messages = len(chunk["messages"])
         if total_messages > printed_messages_count:
             # Print only the messages that haven't been printed yet
@@ -31,4 +35,9 @@ def stream_workflow_updates(workflow: StateGraph):
 
 
 
-stream_workflow_updates(workflow)
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--inspiration-pdf", dest="inspiration_pdf", type=str, default=None, help="Path to a PDF to inspire the proposal prompt")
+    args = parser.parse_args()
+    workflow = get_workflow(inspiration_pdf="./ins.pdf")
+    stream_workflow_updates(workflow)

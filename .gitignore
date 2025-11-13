@@ -176,7 +176,7 @@ pyrightconfig.json
 # End of https://www.toptal.com/developers/gitignore/api/python
 
 
-
+*.pdf
 
 workflow_diagram.png
 cc_protocols/generated_cc.py

@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 import inspect
+from utils import Utils
 
 import streamlit as st
 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
@@ -18,9 +19,12 @@ from agent.agent import Agent, State  # noqa: E402
 
 st.set_page_config(page_title="Agent Workflow Runner", page_icon="🤖", layout="wide")
 
+st.session_state['stop_clicked'] = False  # Initialize the stop button state
+
 @st.cache_resource(show_spinner=False)
-def get_workflow():
-    agent = Agent()
+def get_workflow(inspiration_text: str | None = None):
+    print(inspiration_text)
+    agent = Agent(inspiration_text=inspiration_text)
     return agent.get_workflow()
 
 def to_role(message: Any) -> str:
@@ -132,8 +136,10 @@ def get_streamlit_cb(parent_container: DeltaGenerator) -> BaseCallbackHandler:
 
     return st_cb
 
-def stream_run() -> None:
-    workflow = get_workflow()
+def stream_run(inspiration_text: str | None = None) -> None:
+    # Reset stop button state at the start of the run
+    st.session_state['stop_clicked'] = False
+    workflow = get_workflow(inspiration_text=inspiration_text)
     init_state: State = State({"messages": [], "next_step": None})
     config = {"recursion_limit": 500, "configurable": {"thread_id": "streamlit-session"}}
 
@@ -144,9 +150,13 @@ def stream_run() -> None:
 
     with st.status("Running workflow…", expanded=True) as status:
         for mode, chunk in workflow.stream(init_state, stream_mode=["values", "messages"], config=config):
+            if st.session_state['stop_clicked']:
+                status.update(label="Workflow stopped by user", state="stopped")
+                break
             if mode == "messages":
                 continue
-        status.update(label="Workflow completed", state="complete")
+        if not st.session_state['stop_clicked']:
+            status.update(label="Workflow completed", state="complete")
 
 st.title("Concurrency Control Proposer Workflow Runner")
 st.write("Click the button to run the workflow. This will generate a new concurrency control protocol.")
@@ -154,8 +164,24 @@ st.write("Click the button to run the workflow. This will generate a new concurr
 col1, col2 = st.columns([1, 3])
 with col1:
     run_clicked = st.button("Run workflow", type="primary")
+    stop_clicked = st.button("Stop workflow", type="secondary")
+
+if stop_clicked:
+    st.session_state['stop_clicked'] = True
+
 with col2:
     st.caption("Messages will appear below as Human/AI chat bubbles.")
 
+uploaded_pdf = st.file_uploader("Optional inspiration PDF", type=["pdf"], accept_multiple_files=False)
+inspiration_text: str | None = None
+if uploaded_pdf is not None:
+    try:
+        inspiration_text = Utils.extract_text_from_pdf_bytes(uploaded_pdf.getvalue(), max_chars=120000)
+    except Exception:
+        inspiration_text = None
+
 if run_clicked:
-    stream_run()
+    stream_run(inspiration_text=inspiration_text)
+
+
+

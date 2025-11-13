@@ -2,6 +2,11 @@ from langchain_core.messages.base import get_msg_title_repr
 from langchain_core.utils.interactive_env import is_interactive_env
 from rich import print as rich_print
 from rich.markdown import Markdown
+from typing import Optional
+
+
+from pypdf import PdfReader
+
 
 class Utils:
     global_ai_printout = False
@@ -34,6 +39,43 @@ class Utils:
                     title += f"\nInput: {i['input']}"
             if printout:
                 rich_print(Markdown(format_content(title)))
+
+    @staticmethod
+    def extract_text_from_pdf_path(pdf_path: str, max_chars: int = 8000) -> str:
+        if PdfReader is None:
+            return ""
+        try:
+            reader = PdfReader(pdf_path)
+            parts: list[str] = []
+            for page in reader.pages:
+                text = page.extract_text() or ""
+                if text:
+                    parts.append(text)
+                if sum(len(p) for p in parts) >= max_chars:
+                    break
+            combined = "\n\n".join(parts)
+            return combined[:max_chars]
+        except Exception:
+            return ""
+
+    @staticmethod
+    def extract_text_from_pdf_bytes(data: bytes, max_chars: int = 8000) -> str:
+        if PdfReader is None:
+            return ""
+        try:
+            import io as _io
+            reader = PdfReader(_io.BytesIO(data))
+            parts: list[str] = []
+            for page in reader.pages:
+                text = page.extract_text() or ""
+                if text:
+                    parts.append(text)
+                if sum(len(p) for p in parts) >= max_chars:
+                    break
+            combined = "\n\n".join(parts)
+            return combined[:max_chars]
+        except Exception:
+            return ""
         else:
             # if message.type == "ai":
             #     Utils.global_ai_printout = False

@@ -1,8 +1,19 @@
 
 
-def get_propose_prompt() -> str:
+def get_propose_prompt(inspiration_text: str | None = None) -> str:
     with open('cc_core.py', 'r') as file:
         codebase = file.read()
+    inspiration_block = ""
+    inspiration_guidance = ""
+    if inspiration_text:
+        inspiration_block = f"""
+            Inspiration material (do not copy verbatim; use for ideas only):
+            <inspiration>
+            {inspiration_text}
+            </inspiration>
+        """
+        inspiration_guidance = "- IMPORTANT: YOU MUST Use the inspiration text inside <inspiration> tag to guide your proposal"
+
     prompt = f"""
     You are an expert in database concurrency control research and design.
     Your task is to invent completely new concurrency control protocols — beyond the scope of classical methods like 2PL (Two-Phase Locking), OCC (Optimistic Concurrency Control), or MVCC (Multi-Version Concurrency Control).
@@ -11,11 +22,14 @@ def get_propose_prompt() -> str:
     You will be prompted to write a python code in the future for your protocol based on a codebase that will be provided.
     You will keep improving your protocol until it is correct and novel.
 
+    {inspiration_block}
+
     Propose a radical, novel, and creative ideas for concurrency control protocols. 
     These should be:
     - Correct (i.e., ensure serializability or a similarly strong isolation level)
     - Efficient (good throughput and minimal overhead)
     - Novel (no rehashed or modified versions of 2PL, OCC, or MVCC)
+    {inspiration_guidance}
 
     Let your imagination run wild — combine ideas from distributed systems, machine learning, cryptography, game theory, biology, physics, or even social systems. 
     The goal is to explore uncharted design space.
@@ -41,6 +55,95 @@ def get_propose_prompt() -> str:
     - Trade-offs or Open Questions (optional): Any areas where further analysis or experimentation is needed.
     """
     return prompt
+
+def get_propose_prompt_with_transactions(transactions: list[str], inspiration_text: str | None = None) -> str:
+    with open('cc_core.py', 'r') as file:
+        codebase = file.read()
+    inspiration_block = ""
+    inspiration_guidance = ""
+    if inspiration_text:
+        inspiration_block = f"""
+        Inspiration material (do not copy verbatim; use for ideas only):
+        <inspiration>
+        {inspiration_text}
+        </inspiration>
+        """
+        inspiration_guidance = "- Use the inspiration text to guide your proposal"
+    prompt = f"""
+    You are an expert in database concurrency control research and design.
+    Your task is to invent completely new concurrency control protocols — beyond the scope of classical methods like 2PL (Two-Phase Locking), OCC (Optimistic Concurrency Control), or MVCC (Multi-Version Concurrency Control).
+    This concurrency control protocol is optimized for some specific pre-defined transactions, however, it should be generalizable to other transactions.
+    First, propose a truly novel concurrency control protocol conceptually. Do NOT write code yet.
+
+    You will be prompted to write a python code in the future for your protocol based on a codebase that will be provided.
+    You will keep improving your protocol until it is correct and novel.
+
+    {inspiration_block}
+
+    Propose a radical, novel, and creative ideas for concurrency control protocols. 
+    These should be:
+    - Correct (i.e., ensure serializability or a similarly strong isolation level)
+    - Efficient (good throughput and minimal overhead)
+    - Novel (no rehashed or modified versions of 2PL, OCC, or MVCC)
+    {inspiration_guidance}
+
+    Let your imagination run wild — combine ideas from distributed systems, machine learning, cryptography, game theory, biology, physics, or even social systems. 
+    The goal is to explore uncharted design space.
+
+    The pre-defined transactions are as follows:
+    ```python
+def wl_counter(r: ConcurrentRunner, txn: Transaction) -> None:
+    v = r.log_read(txn, "ctr") or 0
+    r.log_write(txn, "ctr", v + 1)
+    r.log_commit(txn)
+
+
+def wl_bank(r: ConcurrentRunner, txn: Transaction) -> None:
+    # Initialize lazily if keys are absent
+    va = r.log_read(txn, "a") or 0
+    vb = r.log_read(txn, "b") or 0
+    if va == 0 and vb == 0:
+        # Initialize total to 1000 on first txn that finds zeros
+        r.log_write(txn, "a", 500)
+        r.log_write(txn, "b", 500)
+        r.log_commit(txn)
+        return
+    x = random.randint(1, 5)
+    if random.random() < 0.5:
+        va, vb = va - x, vb + x
+    else:
+        va, vb = va + x, vb - x
+    r.log_write(txn, "a", va)
+    r.log_write(txn, "b", vb)
+    r.log_commit(txn)
+    ```
+
+    
+
+    Constraints:
+    - Must be fundamentally different from classical 2PL, OCC, MVCC, SSI, or their trivial variants
+    - Clearly define: metadata maintained, read/write visibility rule, commit rule, conflict handling, abort conditions
+    - Explain why it can ensure serializability or a chosen isolation level
+    - Discuss expected trade-offs (throughput, abort rate, latency) and workloads it suits
+    - DO NOT repeat previous proposals.
+
+    Output Format:
+    - Provide a concise name and a 5-10 bullet point design spec
+    - Core Idea: Summarize the intuition behind the protocol.
+    - Novelty: Why is this approach truly different from traditional concurrency control mechanisms?
+    - Correctness: How does the protocol ensure serializability (or another well-defined correctness criterion)? Provide justification.
+    - How It Works (Step-by-Step): Describe the protocol’s execution flow, including:
+        - Transaction begin
+        - Read/write operations
+        - Conflict detection/resolution (if any)
+        - Commit/Rollback logic
+    - Wrap any example traces or structured artifacts within <observe> ... </observe>
+    - Trade-offs or Open Questions (optional): Any areas where further analysis or experimentation is needed.
+    """
+    return prompt
+
+
+
 
 
 def get_generate_prompt() -> str:
