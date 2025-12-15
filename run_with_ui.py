@@ -22,9 +22,9 @@ st.set_page_config(page_title="Agent Workflow Runner", page_icon="🤖", layout=
 st.session_state['stop_clicked'] = False  # Initialize the stop button state
 
 @st.cache_resource(show_spinner=False)
-def get_workflow(inspiration_text: str | None = None):
-    print(inspiration_text)
-    agent = Agent(inspiration_text=inspiration_text)
+def get_workflow(inspiration_text: str | None = None, language_mode: str = "python"):
+    print(f"inspiration_text: {inspiration_text}, language_mode: {language_mode}")
+    agent = Agent(inspiration_text=inspiration_text, language_mode=language_mode)
     return agent.get_workflow()
 
 def to_role(message: Any) -> str:
@@ -35,10 +35,11 @@ def to_role(message: Any) -> str:
         return "assistant"
     return "system"
 
-def format_content_for_markdown(content: str) -> str:
+def format_content_for_markdown(content: str, language: str = "python") -> str:
     # Match console pretty-printer: render special tags as fenced blocks
+    code_lang = "java" if language == "java" else "python"
     return (
-        content.replace("<execute>", "```python")
+        content.replace("<execute>", f"```{code_lang}")
         .replace("</execute>", "```")
         .replace("<observe>", "```")
         .replace("</observe>", "```")
@@ -136,10 +137,10 @@ def get_streamlit_cb(parent_container: DeltaGenerator) -> BaseCallbackHandler:
 
     return st_cb
 
-def stream_run(inspiration_text: str | None = None) -> None:
+def stream_run(inspiration_text: str | None = None, language_mode: str = "python") -> None:
     # Reset stop button state at the start of the run
     st.session_state['stop_clicked'] = False
-    workflow = get_workflow(inspiration_text=inspiration_text)
+    workflow = get_workflow(inspiration_text=inspiration_text, language_mode=language_mode)
     init_state: State = State({"messages": [], "next_step": None})
     config = {"recursion_limit": 500, "configurable": {"thread_id": "streamlit-session"}}
 
@@ -180,8 +181,16 @@ if uploaded_pdf is not None:
     except Exception:
         inspiration_text = None
 
+# Language mode selector
+language_mode = st.selectbox(
+    "Target Language", 
+    options=["python", "java"],
+    index=0,
+    help="Select the programming language for generated concurrency control code"
+)
+
 if run_clicked:
-    stream_run(inspiration_text=inspiration_text)
+    stream_run(inspiration_text=inspiration_text, language_mode=language_mode)
 
 
 
