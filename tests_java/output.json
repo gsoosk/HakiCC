@@ -1,0 +1,12 @@
+{
+  "metrics": {
+    "correctness": 0.0,
+    "throughput": 0.0,
+    "combined_score": 0.0
+  },
+  "artifacts": {
+    "error_type": "java.lang.RuntimeException",
+    "error_message": "ConcurrentRunner failed with error: java.lang.NullPointerException\njava.base/java.util.concurrent.ConcurrentHashMap.putVal(ConcurrentHashMap.java:1011)\njava.base/java.util.concurrent.ConcurrentHashMap.put(ConcurrentHashMap.java:1006)\ntests_java.GeneratedCC.read(CCImplementationTemp.java:76)\ntests_java.Evaluator$ConcurrentRunner.logRead(Evaluator.java:306)\ntests_java.Evaluator.wlCounter(Evaluator.java:748)\ntests_java.Evaluator$ConcurrentRunner.lambda$run$3(Evaluator.java:199)\njava.base/java.lang.Thread.run(Thread.java:1583)\n",
+    "full_traceback": "tests_java.Evaluator$ConcurrentRunner.run(Evaluator.java:245)\ntests_java.Evaluator.runScenario(Evaluator.java:1014)\ntests_java.Evaluator.evaluate(Evaluator.java:1074)\ntests_java.Evaluator.main(Evaluator.java:1259)\n"
+  }
+}
