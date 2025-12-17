@@ -182,3 +182,8 @@ workflow_diagram.png
 cc_protocols/generated_cc.py
 cc_protocols/final_generations/*
 workflow_diagram.png
+
+
+tests_java/tests_java/*
+tests_java/final_generations/*
+

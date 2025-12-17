@@ -110,8 +110,8 @@ def get_streamlit_cb(parent_container: DeltaGenerator) -> BaseCallbackHandler:
                 pass
 
         def on_llm_new_token(self, token: str, **kwargs) -> None:
-            if self.ai_container is None:
-                self.reset_containers()
+            # if self.ai_container is None:
+            #     self.reset_containers()
             
             self.text += token
             self.text = format_content_for_markdown(self.text)

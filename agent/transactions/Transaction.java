@@ -42,7 +42,7 @@ static void initTpccData(KVStore store) {
         }
     }
 
-    store.put(writes);
+    store.updateAll(writes);
 }
 
 static boolean tpccNewOrder(ConcurrentRunner r, Transaction txn) {

@@ -1,12 +1,56 @@
 {
   "metrics": {
-    "correctness": 0.0,
-    "throughput": 0.0,
-    "combined_score": 0.0
+    "correctness": 1.0,
+    "throughput_score": 0.604232375508706,
+    "combined_score": 0.802116187754353,
+    "pre_known_transactions_throughput": 51295.6
   },
   "artifacts": {
-    "error_type": "java.lang.RuntimeException",
-    "error_message": "ConcurrentRunner failed with error: java.lang.NullPointerException\njava.base/java.util.concurrent.ConcurrentHashMap.putVal(ConcurrentHashMap.java:1011)\njava.base/java.util.concurrent.ConcurrentHashMap.put(ConcurrentHashMap.java:1006)\ntests_java.GeneratedCC.read(CCImplementationTemp.java:76)\ntests_java.Evaluator$ConcurrentRunner.logRead(Evaluator.java:306)\ntests_java.Evaluator.wlCounter(Evaluator.java:748)\ntests_java.Evaluator$ConcurrentRunner.lambda$run$3(Evaluator.java:199)\njava.base/java.lang.Thread.run(Thread.java:1583)\n",
-    "full_traceback": "tests_java.Evaluator$ConcurrentRunner.run(Evaluator.java:245)\ntests_java.Evaluator.runScenario(Evaluator.java:1014)\ntests_java.Evaluator.evaluate(Evaluator.java:1074)\ntests_java.Evaluator.main(Evaluator.java:1259)\n"
+    "scenario_summaries": {
+      "counters": {
+        "committed": 3880477,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 3880477,
+        "throughput": 776095.4,
+        "avg_read_time_nanos": 85.78239505091771,
+        "avg_write_time_nanos": 0.0,
+        "avg_commit_time_nanos": 82262.03242771442,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "bank": {
+        "committed": 1724897,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 6899588,
+        "throughput": 344979.4,
+        "avg_read_time_nanos": 74.50656113270614,
+        "avg_write_time_nanos": 59.9289159765647,
+        "avg_commit_time_nanos": 149702.99573028748,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "deadlock": {
+        "committed": 1753625,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 7014500,
+        "throughput": 350725.0,
+        "avg_read_time_nanos": 81.41746499290034,
+        "avg_write_time_nanos": 63.60094918641165,
+        "avg_commit_time_nanos": 147686.91030554514,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "tpcc": {
+        "committed": 256478,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 4816244,
+        "throughput": 51295.6,
+        "avg_read_time_nanos": 201.93844713706466,
+        "avg_write_time_nanos": 96.6617112633693,
+        "avg_commit_time_nanos": 817782.1390414968,
+        "avg_rollback_time_nanos": 0.0
+      }
+    }
   }
 }
