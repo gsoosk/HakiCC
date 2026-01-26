@@ -108,7 +108,7 @@
 */
 
 
-package tests_java.previous_proposals.archive2;
+package tests_java;
 
 import java.util.Map;
 import java.util.concurrent.*;

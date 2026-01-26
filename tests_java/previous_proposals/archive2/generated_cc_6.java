@@ -122,7 +122,7 @@
 */
 
 
-package tests_java.previous_proposals.archive2;
+package tests_java;
 
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;

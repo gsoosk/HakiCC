@@ -112,7 +112,7 @@
 */
 
 
-package tests_java.previous_proposals.archive2;
+package tests_java;
 
 import java.util.*;
 import java.util.concurrent.*;
