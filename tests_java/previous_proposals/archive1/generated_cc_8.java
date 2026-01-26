@@ -103,7 +103,7 @@
 */
 
 
-package tests_java;
+package tests_java.previous_proposals.archive1;
 
 import java.util.ArrayList;
 import java.util.List;

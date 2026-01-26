@@ -114,7 +114,7 @@
 */
 
 
-package tests_java;
+package tests_java.previous_proposals.archive1;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
