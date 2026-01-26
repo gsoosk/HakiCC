@@ -107,39 +107,41 @@ class Agent:
         previous_proposals = "Previous Proposals:\n"
         project_root = Path(__file__).resolve().parent.parent
         
-        # Check Python proposals
-        py_final_gen_dir = project_root / "cc_protocols" / "final_generations"
-        for p in py_final_gen_dir.glob("generated_cc_*.py"):
-            m = re.match(r"generated_cc_(\d+)\.py", p.name)
-            if m:
-                idx = int(m.group(1))
-                content = p.read_text(encoding="utf-8")
-                # Extract the text between "''' Technical Report:" and the next "'''" from the file content
-                tech_report = ""
-                tech_report_start = content.find("''' Technical Report:")
-                if tech_report_start != -1:
-                    tech_report_start += len("''' Technical Report:")
-                    tech_report_end = content.find("'''", tech_report_start)
-                    if tech_report_end != -1:
-                        tech_report = content[tech_report_start:tech_report_end].strip()
-                previous_proposals += f"[Python] {idx}. {tech_report}\n"
-        
-        # Check Java proposals
-        java_final_gen_dir = project_root / "tests_java" / "final_generations"
-        for p in java_final_gen_dir.glob("generated_cc_*.java"):
-            m = re.match(r"generated_cc_(\d+)\.java", p.name)
-            if m:
-                idx = int(m.group(1))
-                content = p.read_text(encoding="utf-8")
-                # Extract the text between "/* Technical Report:" and the next "*/" from the file content
-                tech_report = ""
-                tech_report_start = content.find("/* Technical Report:")
-                if tech_report_start != -1:
-                    tech_report_start += len("/* Technical Report:")
-                    tech_report_end = content.find("*/", tech_report_start)
-                    if tech_report_end != -1:
-                        tech_report = content[tech_report_start:tech_report_end].strip()
-                previous_proposals += f"[Java] {idx}. {tech_report}\n"
+        if self.language_mode == "java":
+            # Use Java proposals from tests_java/final_generations
+            java_final_gen_dir = project_root / "tests_java" / "final_generations"
+            for p in java_final_gen_dir.glob("generated_cc_*.java"):
+                m = re.match(r"generated_cc_(\d+)\.java", p.name)
+                if m:
+                    idx = int(m.group(1))
+                    content = p.read_text(encoding="utf-8")
+                    # Extract the text between "/* Technical Report:" and the next "*/" from the file content
+                    tech_report = ""
+                    tech_report_start = content.find("/* Technical Report:")
+                    if tech_report_start != -1:
+                        tech_report_start += len("/* Technical Report:")
+                        tech_report_end = content.find("*/", tech_report_start)
+                        if tech_report_end != -1:
+                            tech_report = content[tech_report_start:tech_report_end].strip()
+                    previous_proposals += f"{idx}. {tech_report}\n"
+        else:
+            # Use Python proposals from cc_protocols/final_generations
+            py_final_gen_dir = project_root / "cc_protocols" / "final_generations"
+            for p in py_final_gen_dir.glob("generated_cc_*.py"):
+                m = re.match(r"generated_cc_(\d+)\.py", p.name)
+                if m:
+                    idx = int(m.group(1))
+                    content = p.read_text(encoding="utf-8")
+                    previous_proposals += "--------------------------------------------------\n"
+                    # Extract the text between "''' Technical Report:" and the next "'''" from the file content
+                    tech_report = ""
+                    tech_report_start = content.find("''' Technical Report:")
+                    if tech_report_start != -1:
+                        tech_report_start += len("''' Technical Report:")
+                        tech_report_end = content.find("'''", tech_report_start)
+                        if tech_report_end != -1:
+                            tech_report = content[tech_report_start:tech_report_end].strip()
+                    previous_proposals += f"{idx}. {tech_report}\n"
         
         return previous_proposals
 

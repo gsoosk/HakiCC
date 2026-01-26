@@ -80,12 +80,17 @@ def get_streamlit_cb(parent_container: DeltaGenerator) -> BaseCallbackHandler:
             self.ai_container = None
             self.token_placeholder = None
             self.text = initial_text
+            self.last_update_len = len(initial_text)
 
         def reset_containers(self) -> None:
             print("reset_containers")
             self.ai_container = self.parent_container.chat_message("assistant")
+            if self.token_placeholder is not None and self.text != "":
+                self.text = format_content_for_markdown(self.text)
+                self.token_placeholder.write(self.text)
             self.token_placeholder = self.ai_container.empty()
             self.text = ""
+            self.last_update_len = 0
 
         def on_chat_model_start(self, serialized, messages, **kwargs) -> None:
             # Render the latest human message immediately before token streaming begins
@@ -114,8 +119,11 @@ def get_streamlit_cb(parent_container: DeltaGenerator) -> BaseCallbackHandler:
             #     self.reset_containers()
             
             self.text += token
-            self.text = format_content_for_markdown(self.text)
-            self.token_placeholder.write(self.text)
+            if len(self.text) - self.last_update_len >= 500:
+                self.text = format_content_for_markdown(self.text)
+                self.token_placeholder.write(self.text)
+                self.last_update_len = len(self.text)
+
 
         
     fn_return_type = TypeVar('fn_return_type')

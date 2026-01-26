@@ -5,9 +5,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Simple in-memory key-value store (thread-safe):
+ * Simple in-memory key-value store (thread-safe, supports atomic operations on numeric values):
  *   - get(key): O(1) lookup
- *   - insert(key, value): O(1) insert
+ *   - insert(key, value): O(1) insert 
  *   - update(key, value): O(1) update
  *   - increment(key, delta): O(1) atomic increment (for AtomicLong values)
  *   - decrement(key, delta): O(1) atomic decrement (for AtomicLong values)
@@ -36,11 +36,17 @@ class KVStore {
      * Inserts a new key-value pair into the store.
      * 
      * @param key The key to insert
-     * @param value The value to associate with the key
+     * @param value The value to associate with the key - Numeric values will be wrapped in an AtomicLong to be used for atomic operations.
      * @return The previous value associated with the key, or null if there was none
      */
     public Object insert(String key, Object value) {
-        return data.putIfAbsent(key, value);
+        if (value instanceof Number) {
+            AtomicLong dataValue = new AtomicLong(((Number) value).longValue());
+            data.put(key, dataValue);
+            return dataValue;
+        }
+        
+        return data.putIfAbsent(key, value);  
     }
 
     /**
@@ -51,6 +57,12 @@ class KVStore {
      * @return The previous value associated with the key, or null if there was none
      */
     public Object update(String key, Object value) {
+        if (value instanceof Number) {
+            AtomicLong dataValue = new AtomicLong(((Number) value).longValue());
+            data.put(key, dataValue);
+            return dataValue;
+        }
+        
         return data.put(key, value);
     }
 

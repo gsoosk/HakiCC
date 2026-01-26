@@ -1120,8 +1120,8 @@ public class Evaluator {
 
 
         List<Op> opsToUse;
-        if (result.ops.size() > 100000) {
-            opsToUse = result.ops.subList(result.ops.size() - 100000, result.ops.size());
+        if (result.ops.size() > 10000) {
+            opsToUse = result.ops.subList(result.ops.size() - 10000, result.ops.size());
         } else {
             opsToUse = result.ops;
         }

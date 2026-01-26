@@ -19,7 +19,7 @@ def get_propose_prompt(inspiration_text: str | None = None) -> str:
     Your task is to invent completely new concurrency control protocols — beyond the scope of classical methods like 2PL (Two-Phase Locking), OCC (Optimistic Concurrency Control), or MVCC (Multi-Version Concurrency Control).
     First, propose a truly novel concurrency control protocol conceptually. Do NOT write code yet.
 
-    You will be prompted to write a python code in the future for your protocol based on a codebase that will be provided.
+    You will be prompted to write a java code in the future for your protocol based on a codebase that will be provided.
     You will keep improving your protocol until it is correct and novel.
 
     {inspiration_block}
@@ -93,54 +93,50 @@ def get_propose_prompt_with_transactions2(transactions: list[str], inspiration_t
     if transactions:
         transactions_block = f"""
         The pre-defined transactions are as follows:
+        <transactions>
         {transactions}
+        </transactions>
         """
     
     prompt = f"""
     You are an expert in database concurrency control research and design.
-    Your task is to invent completely new concurrency control protocols — beyond the scope of classical methods like 2PL (Two-Phase Locking), OCC (Optimistic Concurrency Control), or MVCC (Multi-Version Concurrency Control).
-    
+    Your task is to design a concurrency control protocol that is optimized for a set of pre-known transaction types.
 
     IMPORTANT:
-     - This concurrency control protocol is optimized for a set of pre-known transaction types. 
-     - Use information from these transactions to optimize your protocol design. 
-     - It is important to note that while the protocol is optimized for these specific pre-defined transactions
-     - You have access to the full code of these transactions.
-     - FOR EXAMPLE: you can skip lock for specific keys, reorder locks, use commutative properties, or any other optimization that can make the protocol more efficient for these transactions.
-
-
-     
-    The goal is to design a concurrency control to be as efficient as possible for the pre-defined transactions.
+        - This concurrency control protocol is optimized for a set of pre-known transaction types. 
+        - Use the provided pre-defined transactions code to optimize your protocol design. 
+        - You have access to the full code of these transactions. provided in the <transactions> tag.
+        - FOR EXAMPLE: you can skip lock for specific keys, reorder locks, use commutative properties, or any other optimization that can make the protocol more efficient for these transactions. 
+            Try any optimization that can make the protocol more efficient for these transactions.
     
-    First, propose a truly novel concurrency control protocol conceptually. Do NOT write code yet.
-    You will be prompted to write a python code in the future for your protocol based on a codebase that will be provided.
-    You will keep improving your protocol until it is correct and novel.
+    GOAL:
+        - The goal is to design a concurrency control to be as efficient as possible for the pre-defined transactions.
 
-    {inspiration_block}
-
-    Propose a radical, novel, and creative ideas for concurrency control protocols. 
-    These should be:
-    - Correct (i.e., ensure serializability or a similarly strong isolation level)
-    - Efficient (good throughput and minimal overhead)
-    - Novel (no rehashed or modified versions of 2PL, OCC, or MVCC)
-    {inspiration_guidance}
-
-    Let your imagination run wild. The goal is to explore uncharted design space.
-
+    CONSTRAINTS:
+        - Your protocol should be a design beyond the scope of classical methods like 2PL (Two-Phase Locking), OCC (Optimistic Concurrency Control), or MVCC (Multi-Version Concurrency Control).
+            Simple implementations of 2PL, OCC, or MVCC are not allowed. Optimize them for the pre-defined transactions.
+        - Clearly define: metadata maintained, read/write visibility rule, commit rule, conflict handling, abort conditions 
+        - Explain why it can ensure serializability or a chosen isolation level
+        - Discuss expected trade-offs (throughput, abort rate, latency) and workloads it suits
+        - DO NOT repeat previous proposals.
+    
+    
     {transactions_block}
 
-    Constraints:
-    - Must be fundamentally different from classical 2PL, OCC, MVCC, SSI, or their trivial variants
-    - Clearly define: metadata maintained, read/write visibility rule, commit rule, conflict handling, abort conditions
-    - Explain why it can ensure serializability or a chosen isolation level
-    - Discuss expected trade-offs (throughput, abort rate, latency) and workloads it suits
-    - DO NOT repeat previous proposals.
+
+    First, propose a the design of the concurrency control protocol conceptually. Do NOT write code yet.
+    You will be prompted to write a java code in the future for your protocol based on a codebase that will be provided.
+    You will keep improving your protocol until it is correct and serializable.
+
+    {inspiration_block}
+    {inspiration_guidance}
+
+
 
     Output Format:
     - Provide a concise name and a 5-10 bullet point design spec
     - Core Idea: Summarize the intuition behind the protocol.
-    - How does the procotol is optimized for the pre-defined transactions?
-    - Novelty: Why is this approach truly different from traditional concurrency control mechanisms?
+    - Performance: How does the procotol is optimized for the pre-defined transactions?
     - Correctness: How does the protocol ensure serializability (or another well-defined correctness criterion)? Provide justification.
     - Complete details of how It Works (Step-by-Step): Describe the protocol’s execution flow, including:
         - Transaction begin
@@ -173,7 +169,7 @@ def get_propose_prompt_with_transactions(transactions: list[str], inspiration_te
     This concurrency control protocol is optimized for some specific pre-defined transactions, however, it should be generalizable to other transactions.
     First, propose a truly novel concurrency control protocol conceptually. Do NOT write code yet.
 
-    You will be prompted to write a python code in the future for your protocol based on a codebase that will be provided.
+    You will be prompted to write a java code in the future for your protocol based on a codebase that will be provided.
     You will keep improving your protocol until it is correct and novel.
 
     {inspiration_block}
@@ -441,9 +437,10 @@ def get_generate_prompt_java() -> str:
 
         * Only return the code you newly implemented. Do not return the codebase as it already exists. 
 
-        * Your final concurrency control protocol class MUST be named "GeneratedCC" and it MUST extend the ConcurrencyControl class.
+        * Your final concurrency control protocol class MUST be named "GeneratedCC" and it MUST extend the ConcurrencyControl class. Do not include `public` when defining the class.
         * Your class MUST be in package `tests_java`.
         * Your class MUST include: `public static ConcurrencyControl buildCc() {{ return new GeneratedCC(); }}`
+        
 
         * You can implement your own helper classes within the same file if needed. 
         * IMPORTANT: Do not re-implement any existing classes from Concurrency.java or KVStore.java.
