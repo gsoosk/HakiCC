@@ -909,6 +909,7 @@ public class Evaluator {
 
     // ---------- TPC-C Workload ----------
 
+    // Default TPC-C configuration
     static final int TPCC_NUM_WAREHOUSES = 8;
     static final int TPCC_DISTRICTS_PER_WH = 10;
     static final int TPCC_CUSTOMERS_PER_DIST = 100;
@@ -917,20 +918,118 @@ public class Evaluator {
     static final int TPCC_INITIAL_BALANCE = 10000;
     static final int TPCC_INITIAL_YTD = 0;
 
+    /**
+     * TPC-C configuration class for parameterized benchmarks.
+     * Allows customizing warehouse count and contention levels.
+     */
+    static class TpccConfig {
+        final int numWarehouses;
+        final int districtsPerWh;
+        final int customersPerDist;
+        final int numItems;
+        final int hotItemCount;       // Number of "hot" items for contention (0 = uniform access)
+        final double hotItemProb;     // Probability of accessing hot items (0.0-1.0)
+        final int hotWarehouseCount;  // Number of "hot" warehouses (0 = uniform access)
+        final double hotWarehouseProb; // Probability of accessing hot warehouses
+        final String configName;      // Name for this configuration
+
+        TpccConfig(int numWarehouses, int districtsPerWh, int customersPerDist, int numItems,
+                   int hotItemCount, double hotItemProb, int hotWarehouseCount, double hotWarehouseProb,
+                   String configName) {
+            this.numWarehouses = numWarehouses;
+            this.districtsPerWh = districtsPerWh;
+            this.customersPerDist = customersPerDist;
+            this.numItems = numItems;
+            this.hotItemCount = hotItemCount;
+            this.hotItemProb = hotItemProb;
+            this.hotWarehouseCount = hotWarehouseCount;
+            this.hotWarehouseProb = hotWarehouseProb;
+            this.configName = configName;
+        }
+
+        // Factory methods for common configurations
+        static TpccConfig withWarehouses(int numWarehouses) {
+            return new TpccConfig(numWarehouses, 10, 100, 1000, 0, 0.0, 0, 0.0,
+                    "tpcc_wh" + numWarehouses);
+        }
+
+        static TpccConfig withContention(String level) {
+            switch (level) {
+                case "very_low":
+                    // Uniform access across all items and warehouses
+                    return new TpccConfig(8, 10, 100, 1000, 0, 0.0, 0, 0.0,
+                            "tpcc_contention_very_low");
+                case "low":
+                    // Slight hotspots: 10% of items get 30% of accesses
+                    return new TpccConfig(8, 10, 100, 1000, 100, 0.3, 0, 0.0,
+                            "tpcc_contention_low");
+                case "medium":
+                    // Moderate hotspots: 5% of items get 50% of accesses
+                    return new TpccConfig(8, 10, 100, 1000, 50, 0.5, 2, 0.3,
+                            "tpcc_contention_medium");
+                case "high":
+                    // High contention: 2% of items get 70% of accesses, 2 hot warehouses
+                    return new TpccConfig(8, 10, 100, 1000, 20, 0.7, 2, 0.5,
+                            "tpcc_contention_high");
+                case "very_high":
+                    // Very high contention: 1% of items get 90% of accesses, 1 hot warehouse
+                    return new TpccConfig(8, 10, 100, 1000, 10, 0.9, 1, 0.7,
+                            "tpcc_contention_very_high");
+                case "extreme":
+                    // Extreme contention: 5 items get 95% of accesses, 1 hot warehouse gets 90%
+                    return new TpccConfig(8, 10, 100, 1000, 5, 0.95, 1, 0.9,
+                            "tpcc_contention_extreme");
+                default:
+                    return new TpccConfig(8, 10, 100, 1000, 0, 0.0, 0, 0.0,
+                            "tpcc_contention_default");
+            }
+        }
+
+        /**
+         * Select a warehouse ID based on contention configuration.
+         */
+        int selectWarehouse(Random rand) {
+            if (hotWarehouseCount > 0 && rand.nextDouble() < hotWarehouseProb) {
+                // Access a hot warehouse
+                return rand.nextInt(hotWarehouseCount) + 1;
+            }
+            return rand.nextInt(numWarehouses) + 1;
+        }
+
+        /**
+         * Select an item ID based on contention configuration.
+         */
+        int selectItem(Random rand) {
+            if (hotItemCount > 0 && rand.nextDouble() < hotItemProb) {
+                // Access a hot item
+                return rand.nextInt(hotItemCount) + 1;
+            }
+            return rand.nextInt(numItems) + 1;
+        }
+    }
+
+    // Thread-local TPC-C configuration for parameterized workloads
+    static final ThreadLocal<TpccConfig> tlsTpccConfig = new ThreadLocal<>();
+
     static void initTpccData(KVStore store) {
+        initTpccDataWithConfig(store, new TpccConfig(TPCC_NUM_WAREHOUSES, TPCC_DISTRICTS_PER_WH,
+                TPCC_CUSTOMERS_PER_DIST, TPCC_NUM_ITEMS, 0, 0.0, 0, 0.0, "default"));
+    }
+
+    static void initTpccDataWithConfig(KVStore store, TpccConfig config) {
         Random rand = new Random(42);  // Fixed seed for reproducibility
 
         // Initialize warehouses
-        for (int wid = 1; wid <= TPCC_NUM_WAREHOUSES; wid++) {
+        for (int wid = 1; wid <= config.numWarehouses; wid++) {
             store.insert("w_" + wid + "_ytd", TPCC_INITIAL_YTD);
 
             // Initialize districts per warehouse
-            for (int did = 1; did <= TPCC_DISTRICTS_PER_WH; did++) {
+            for (int did = 1; did <= config.districtsPerWh; did++) {
                 store.insert("d_" + wid + "_" + did + "_ytd", TPCC_INITIAL_YTD);
                 store.insert("d_" + wid + "_" + did + "_next_oid", 1);
 
                 // Initialize customers per district
-                for (int cid = 1; cid <= TPCC_CUSTOMERS_PER_DIST; cid++) {
+                for (int cid = 1; cid <= config.customersPerDist; cid++) {
                     store.insert("c_" + wid + "_" + did + "_" + cid + "_bal", TPCC_INITIAL_BALANCE);
                     store.insert("c_" + wid + "_" + did + "_" + cid + "_ytd", TPCC_INITIAL_YTD);
                 }
@@ -938,24 +1037,37 @@ public class Evaluator {
         }
 
         // Initialize items (global, not per-warehouse)
-        for (int iid = 1; iid <= TPCC_NUM_ITEMS; iid++) {
+        for (int iid = 1; iid <= config.numItems; iid++) {
             store.insert("item_" + iid + "_price", rand.nextInt(9901) + 100);  // 100-10000
         }
 
         // Initialize stock per warehouse per item
-        for (int wid = 1; wid <= TPCC_NUM_WAREHOUSES; wid++) {
-            for (int iid = 1; iid <= TPCC_NUM_ITEMS; iid++) {
+        for (int wid = 1; wid <= config.numWarehouses; wid++) {
+            for (int iid = 1; iid <= config.numItems; iid++) {
                 store.insert("s_" + wid + "_" + iid + "_qty", TPCC_INITIAL_STOCK);
             }
         }
     }
 
+    static Consumer<KVStore> createTpccInitializer(TpccConfig config) {
+        return store -> initTpccDataWithConfig(store, config);
+    }
+
     static boolean tpccNewOrder(ConcurrentRunner r, Transaction txn) {
+        TpccConfig config = tlsTpccConfig.get();
+        if (config == null) {
+            config = new TpccConfig(TPCC_NUM_WAREHOUSES, TPCC_DISTRICTS_PER_WH,
+                    TPCC_CUSTOMERS_PER_DIST, TPCC_NUM_ITEMS, 0, 0.0, 0, 0.0, "default");
+        }
+        return tpccNewOrderWithConfig(r, txn, config);
+    }
+
+    static boolean tpccNewOrderWithConfig(ConcurrentRunner r, Transaction txn, TpccConfig config) {
         Random rand = ThreadLocalRandom.current();
 
-        int wid = rand.nextInt(TPCC_NUM_WAREHOUSES) + 1;
-        int did = rand.nextInt(TPCC_DISTRICTS_PER_WH) + 1;
-        int cid = rand.nextInt(TPCC_CUSTOMERS_PER_DIST) + 1;
+        int wid = config.selectWarehouse(rand);
+        int did = rand.nextInt(config.districtsPerWh) + 1;
+        int cid = rand.nextInt(config.customersPerDist) + 1;
 
         // Read and update district's next order ID
         String nextOidKey = "d_" + wid + "_" + did + "_next_oid";
@@ -973,7 +1085,7 @@ public class Evaluator {
         int totalAmount = 0;
 
         for (int olNum = 1; olNum <= numItems; olNum++) {
-            int iid = rand.nextInt(TPCC_NUM_ITEMS) + 1;
+            int iid = config.selectItem(rand);
 
             // Read item price
             String itemPriceKey = "item_" + iid + "_price";
@@ -1004,11 +1116,20 @@ public class Evaluator {
     }
 
     static boolean tpccPayment(ConcurrentRunner r, Transaction txn) {
+        TpccConfig config = tlsTpccConfig.get();
+        if (config == null) {
+            config = new TpccConfig(TPCC_NUM_WAREHOUSES, TPCC_DISTRICTS_PER_WH,
+                    TPCC_CUSTOMERS_PER_DIST, TPCC_NUM_ITEMS, 0, 0.0, 0, 0.0, "default");
+        }
+        return tpccPaymentWithConfig(r, txn, config);
+    }
+
+    static boolean tpccPaymentWithConfig(ConcurrentRunner r, Transaction txn, TpccConfig config) {
         Random rand = ThreadLocalRandom.current();
 
-        int wid = rand.nextInt(TPCC_NUM_WAREHOUSES) + 1;
-        int did = rand.nextInt(TPCC_DISTRICTS_PER_WH) + 1;
-        int cid = rand.nextInt(TPCC_CUSTOMERS_PER_DIST) + 1;
+        int wid = config.selectWarehouse(rand);
+        int did = rand.nextInt(config.districtsPerWh) + 1;
+        int cid = rand.nextInt(config.customersPerDist) + 1;
 
         int paymentAmount = rand.nextInt(499901) + 100;  // 100-500000
 
@@ -1054,6 +1175,34 @@ public class Evaluator {
         } else {
             r.logRollback(txn);
         }
+    }
+
+    /**
+     * Creates a TPC-C workload with the specified configuration.
+     * The config is set per-thread to allow concurrent workloads with different configs.
+     */
+    static BiConsumer<ConcurrentRunner, Transaction> createTpccWorkload(TpccConfig config) {
+        return (r, txn) -> {
+            tlsTpccConfig.set(config);
+            try {
+                Random rand = ThreadLocalRandom.current();
+                boolean success;
+
+                if (rand.nextBoolean()) {
+                    success = tpccNewOrderWithConfig(r, txn, config);
+                } else {
+                    success = tpccPaymentWithConfig(r, txn, config);
+                }
+
+                if (success) {
+                    r.logCommit(txn);
+                } else {
+                    r.logRollback(txn);
+                }
+            } finally {
+                tlsTpccConfig.remove();
+            }
+        };
     }
 
     // ---------- Scenario running ----------
@@ -1177,10 +1326,45 @@ public class Evaluator {
         try {
             Map<String, ScenarioResult> scenarios = new LinkedHashMap<>();
 
+            // Basic workloads
             scenarios.put("counters", runScenario(ccFactory, Evaluator::wlCounter, 64, 5.0, 0.5, null));
             scenarios.put("bank", runScenario(ccFactory, Evaluator::wlBank, 64, 5.0, 0.5, null));
             scenarios.put("deadlock", runScenario(ccFactory, Evaluator::wlDeadlockProne, 64, 5.0, 0.2, null));
+
+            // TPC-C with default 8 warehouses (for backwards compatibility)
             scenarios.put("tpcc", runScenario(ccFactory, Evaluator::wlTpcc, 64, 5.0, 0.5, Evaluator::initTpccData));
+
+            // TPC-C with different warehouse counts (scalability benchmark)
+            int[] warehouseCounts = {1, 2, 4, 8, 16};
+            for (int whCount : warehouseCounts) {
+                TpccConfig config = TpccConfig.withWarehouses(whCount);
+                String scenarioName = config.configName;
+                System.out.println("Running TPC-C with " + whCount + " warehouse(s)...");
+                scenarios.put(scenarioName, runScenario(
+                        ccFactory,
+                        createTpccWorkload(config),
+                        64,
+                        5.0,
+                        0.5,
+                        createTpccInitializer(config)
+                ));
+            }
+
+            // TPC-C with different contention levels (8 warehouses, varying hotspot intensity)
+            String[] contentionLevels = {"very_low", "low", "medium", "high", "very_high", "extreme"};
+            for (String level : contentionLevels) {
+                TpccConfig config = TpccConfig.withContention(level);
+                String scenarioName = config.configName;
+                System.out.println("Running TPC-C with contention level: " + level + "...");
+                scenarios.put(scenarioName, runScenario(
+                        ccFactory,
+                        createTpccWorkload(config),
+                        64,
+                        5.0,
+                        0.5,
+                        createTpccInitializer(config)
+                ));
+            }
 
             int totalScenarios = scenarios.size();
             int correct = 0;
@@ -1206,7 +1390,8 @@ public class Evaluator {
                     correct++;
                 }
 
-                if ("tpcc".equals(name)) {
+                // Weight TPC-C scenarios higher
+                if (name.startsWith("tpcc")) {
                     totalThroughput += s.throughput * tpccCoefficient;
                     weightedScenarios += tpccCoefficient;
                 } else {
@@ -1228,6 +1413,26 @@ public class Evaluator {
             metrics.put("throughput_score", throughputScore);
             metrics.put("combined_score", combinedScore);
             metrics.put("pre_known_transactions_throughput", throughputs.get("tpcc"));
+
+            // Add warehouse scalability summary
+            Map<String, Double> warehouseScalability = new LinkedHashMap<>();
+            for (int whCount : warehouseCounts) {
+                String key = "tpcc_wh" + whCount;
+                if (throughputs.containsKey(key)) {
+                    warehouseScalability.put(key, throughputs.get(key));
+                }
+            }
+            metrics.put("warehouse_scalability", warehouseScalability);
+
+            // Add contention impact summary
+            Map<String, Double> contentionImpact = new LinkedHashMap<>();
+            for (String level : contentionLevels) {
+                String key = "tpcc_contention_" + level;
+                if (throughputs.containsKey(key)) {
+                    contentionImpact.put(key, throughputs.get(key));
+                }
+            }
+            metrics.put("contention_impact", contentionImpact);
 
             Map<String, Object> scenarioSummaries = new LinkedHashMap<>();
             for (Map.Entry<String, ScenarioResult> entry : scenarios.entrySet()) {

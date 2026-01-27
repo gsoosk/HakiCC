@@ -187,3 +187,6 @@ workflow_diagram.png
 tests_java/tests_java/*
 tests_java/final_generations/*
 
+
+
+tests_java/benchmark_results/*

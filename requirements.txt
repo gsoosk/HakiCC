@@ -9,3 +9,5 @@ rich
 streamlit
 langchain_openai
 pypdf
+matplotlib
+numpy
