@@ -123,7 +123,7 @@ class Agent:
                         tech_report_end = content.find("*/", tech_report_start)
                         if tech_report_end != -1:
                             tech_report = content[tech_report_start:tech_report_end].strip()
-                    previous_proposals += f"{idx}. {tech_report}\n"
+                    previous_proposals += f"# PROPOSAL {idx}: {tech_report}\n"
         else:
             # Use Python proposals from cc_protocols/final_generations
             py_final_gen_dir = project_root / "cc_protocols" / "final_generations"

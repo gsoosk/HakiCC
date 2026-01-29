@@ -2,98 +2,60 @@
 package tests_java;
 
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.NavigableMap;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.ReentrantLock;
 
-/**
- * KeyType defines the semantic category of a key based on TPC-C access patterns.
- */
-enum KeyType {
-    COMMUTATIVE_UPDATE,
-    CONDITIONAL_UPDATE_STOCK_QTY,
-    READ_ONLY_ITEM_PRICE,
-    DEFERRED_BLIND_WRITE_ORDER,
-    GENERAL_READ_WRITE;
+// Helper enums for the versioning system
+enum VersionType { ABSOLUTE, DELTA }
+enum VersionStatus { SPECULATIVE, ABORTED }
+
+// A class representing a single version of a key's value.
+class Version {
+    final Object value;
+    final long seq;
+    final VersionType type;
+    final VersionStatus status;
+
+    Version(Object value, long seq, VersionType type, VersionStatus status) {
+        this.value = value;
+        this.seq = seq;
+        this.type = type;
+        this.status = status;
+    }
+
+    public Object value() { return value; }
+    public long seq() { return seq; }
+    public VersionType type() { return type; }
+    public VersionStatus status() { return status; }
+
+    Version asAborted() {
+        return new Version(this.value, this.seq, this.type, VersionStatus.ABORTED);
+    }
 }
 
-/**
- * KeyClassifier is a static utility to determine the KeyType of a given key.
- */
-class KeyClassifier {
-    public static KeyType classify(String key) {
-        if (key.startsWith("s_")) {
-            return KeyType.CONDITIONAL_UPDATE_STOCK_QTY;
-        }
-        if (key.startsWith("item_")) {
-            return KeyType.READ_ONLY_ITEM_PRICE;
-        }
-        if (key.startsWith("o_")) {
-            return KeyType.DEFERRED_BLIND_WRITE_ORDER;
-        }
-        if (key.startsWith("c_") || key.startsWith("w_") || key.startsWith("d_")) {
-            return KeyType.COMMUTATIVE_UPDATE;
-        }
-        return KeyType.GENERAL_READ_WRITE;
+// Manages the chain of versions for a single key.
+class VersionChain {
+    final ConcurrentSkipListMap<Long, Version> versions = new ConcurrentSkipListMap<>();
+
+    VersionChain(Object initialValue) {
+        versions.put(0L, new Version(initialValue, 0L, VersionType.ABSOLUTE, VersionStatus.SPECULATIVE));
     }
 }
 
 /**
- * Manages Strict Two-Phase Locks (S2PL).
- */
-class LockManager {
-    private final ConcurrentHashMap<String, ReentrantLock> locks = new ConcurrentHashMap<>();
-    private static final long LOCK_TIMEOUT_MS = 10;
-
-    @SuppressWarnings("unchecked")
-    public boolean acquire(Transaction txn, String key) {
-        ReentrantLock lock = locks.computeIfAbsent(key, k -> new ReentrantLock());
-        Set<ReentrantLock> heldLocks = (Set<ReentrantLock>) txn.meta.get("HELD_LOCKS");
-        if (heldLocks.contains(lock)) {
-            return true;
-        }
-        try {
-            if (lock.tryLock(LOCK_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                heldLocks.add(lock);
-                return true;
-            } else {
-                txn.status = TxStatus.ABORTED;
-                return false;
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            txn.status = TxStatus.ABORTED;
-            return false;
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    public void releaseAll(Transaction txn) {
-        Set<ReentrantLock> heldLocks = (Set<ReentrantLock>) txn.meta.get("HELD_LOCKS");
-        if (heldLocks != null) {
-            for (ReentrantLock lock : heldLocks) {
-                if (lock.isHeldByCurrentThread()) {
-                    lock.unlock();
-                }
-            }
-        }
-    }
-}
-
-/**
- * Implements the final, correct version of the Transaction-Aware Concurrency Control protocol.
+ * Deterministic Version-Chain Execution (DVCE) Concurrency Control Protocol.
+ * This version fixes a NullPointerException caused by putting null into a ConcurrentHashMap.
  */
 class GeneratedCC extends ConcurrencyControl {
-    private final AtomicInteger txidCounter = new AtomicInteger(0);
-    private final LockManager lockManager = new LockManager();
-    private final ReentrantLock commitLock = new ReentrantLock();
+    private static final String SEQ_KEY = "seq";
 
-    private static final String DELTA_BUFFER_KEY = "DELTA_BUFFER";
-    private static final String HELD_LOCKS_KEY = "HELD_LOCKS";
-    private static final String OCC_READS_KEY = "OCC_READS";
+    private final ConcurrentHashMap<String, VersionChain> multiVersionStore = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, Scheduler> schedulers = new ConcurrentHashMap<>();
+
+    private static class Scheduler {
+        final AtomicLong seqCounter = new AtomicLong(1);
+    }
 
     public static ConcurrencyControl buildCc() {
         return new GeneratedCC();
@@ -101,136 +63,138 @@ class GeneratedCC extends ConcurrencyControl {
 
     @Override
     public Transaction begin(KVStore store) {
-        int txid = txidCounter.incrementAndGet();
-        Transaction txn = new Transaction(txid, 0);
-        txn.meta.put(DELTA_BUFFER_KEY, new ConcurrentHashMap<String, Long>());
-        txn.meta.put(HELD_LOCKS_KEY, ConcurrentHashMap.newKeySet());
-        txn.meta.put(OCC_READS_KEY, new ConcurrentHashMap<String, Integer>());
-        return txn;
+        return new Transaction((int) System.nanoTime(), (int) System.nanoTime());
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public Object read(Transaction txn, String key, KVStore store) {
-        if (txn.status == TxStatus.ABORTED) return null;
+        if (txn.status != TxStatus.ACTIVE) return null;
 
-        KeyType type = KeyClassifier.classify(key);
+        assignSequence(txn, key);
+        long txnSeq = (long) txn.meta.get(SEQ_KEY);
 
-        switch (type) {
-            case GENERAL_READ_WRITE:
-            case CONDITIONAL_UPDATE_STOCK_QTY: {
-                if (!lockManager.acquire(txn, key)) return null;
-                Object value = store.get(key);
-                if (value == null) return null;
-                Integer intValue = (value instanceof AtomicLong) ? (int)((AtomicLong)value).get() : (Integer)value;
-                txn.readSet.put(key, intValue);
-                return intValue;
+        VersionChain vc = multiVersionStore.computeIfAbsent(key, k -> {
+            Object initialValue = store.get(k);
+            if (initialValue instanceof AtomicLong) {
+                initialValue = ((AtomicLong) initialValue).get();
             }
-            
-            case READ_ONLY_ITEM_PRICE: {
-                Object value = store.get(key);
-                if (value == null) return null;
-                Integer intValue = (value instanceof AtomicLong) ? (int)((AtomicLong)value).get() : (Integer)value;
-                txn.readSet.put(key, intValue);
-                return intValue;
-            }
+            return new VersionChain(initialValue != null ? initialValue : 0L);
+        });
 
-            case COMMUTATIVE_UPDATE: {
-                Object value = store.get(key);
-                if (value == null) return null;
-                Integer intValue = (value instanceof AtomicLong) ? (int)((AtomicLong)value).get() : (Integer)value;
-                ((ConcurrentHashMap<String, Integer>)txn.meta.get(OCC_READS_KEY)).put(key, intValue);
-                txn.readSet.put(key, intValue);
-                return intValue;
+        NavigableMap<Long, Version> visibleVersions = vc.versions.headMap(txnSeq, false);
+
+        long baseValue = 0L;
+        long lastAbsoluteSeq = 0L;
+
+        for (Version v : visibleVersions.descendingMap().values()) {
+            if (v.status() == VersionStatus.ABORTED) continue;
+            if (v.type() == VersionType.ABSOLUTE) {
+                baseValue = ((Number) v.value()).longValue();
+                lastAbsoluteSeq = v.seq();
+                break;
             }
         }
-        return null; // Should be unreachable
+
+        long deltaSum = 0L;
+        for (Version v : visibleVersions.tailMap(lastAbsoluteSeq, false).values()) {
+             if (v.seq() > lastAbsoluteSeq && v.status() != VersionStatus.ABORTED && v.type() == VersionType.DELTA) {
+                deltaSum += ((Number) v.value()).longValue();
+            }
+        }
+
+        return baseValue + deltaSum;
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public void write(Transaction txn, String key, Object value, KVStore store) {
-        if (txn.status == TxStatus.ABORTED) return;
+        if (txn.status != TxStatus.ACTIVE) return;
 
-        KeyType type = KeyClassifier.classify(key);
+        assignSequence(txn, key);
+        long txnSeq = (long) txn.meta.get(SEQ_KEY);
+        
+        VersionChain vc = multiVersionStore.computeIfAbsent(key, k -> {
+            Object initialValue = store.get(k);
+            if (initialValue instanceof AtomicLong) {
+                initialValue = ((AtomicLong) initialValue).get();
+            }
+            return new VersionChain(initialValue != null ? initialValue : 0L);
+        });
 
-        switch (type) {
-            case COMMUTATIVE_UPDATE:
-                ConcurrentHashMap<String, Long> deltaBuffer = (ConcurrentHashMap<String, Long>) txn.meta.get(DELTA_BUFFER_KEY);
-                Object oldValueObj = txn.readSet.get(key);
-                if (oldValueObj == null) {
-                    txn.writeSet.put(key, value);
-                    return;
-                }
-                long oldValue = ((Number) oldValueObj).longValue();
-                long newValue = ((Number) value).longValue();
-                long delta = newValue - oldValue;
-                deltaBuffer.merge(key, delta, Long::sum);
-                break;
+        VersionType type = classifyWrite(key);
+        Object writeValue = value;
 
-            case DEFERRED_BLIND_WRITE_ORDER:
-            case CONDITIONAL_UPDATE_STOCK_QTY:
-            case GENERAL_READ_WRITE:
-            default:
-                txn.writeSet.put(key, value);
-                break;
+        if (type == VersionType.DELTA) {
+            Object readResult = read(txn, key, store);
+            long currentValue = (readResult instanceof Number) ? ((Number) readResult).longValue() : 0L;
+            long finalValue = ((Number) value).longValue();
+            writeValue = finalValue - currentValue;
         }
+
+        Version newVersion = new Version(writeValue, txnSeq, type, VersionStatus.SPECULATIVE);
+        vc.versions.put(txnSeq, newVersion);
+        
+        // FIX: ConcurrentHashMap does not allow null values. Use a non-null placeholder.
+        txn.writeSet.put(key, Boolean.TRUE); 
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public CommitResult commit(Transaction txn, KVStore store) {
-        commitLock.lock();
-        try {
-            synchronized (txn) {
-                if (txn.status != TxStatus.ACTIVE) {
-                    return CommitResult.failure("Transaction already " + txn.status);
-                }
-
-                ConcurrentHashMap<String, Integer> occReads = (ConcurrentHashMap<String, Integer>) txn.meta.get(OCC_READS_KEY);
-                for (Map.Entry<String, Integer> entry : occReads.entrySet()) {
-                    String key = entry.getKey();
-                    Integer readValue = entry.getValue();
-                    Object currentValObj = store.get(key);
-                    Integer currentValue = (currentValObj instanceof AtomicLong) ? (int)((AtomicLong)currentValObj).get() : (Integer)currentValObj;
-
-                    if (!readValue.equals(currentValue)) {
-                        txn.status = TxStatus.ABORTED;
-                        return CommitResult.failure("OCC validation failed for key: " + key);
-                    }
-                }
-                txn.status = TxStatus.COMMITTED;
-            }
-
-            ConcurrentHashMap<String, Long> deltaBuffer = (ConcurrentHashMap<String, Long>) txn.meta.get(DELTA_BUFFER_KEY);
-            for (Map.Entry<String, Long> entry : deltaBuffer.entrySet()) {
-                store.increment(entry.getKey(), entry.getValue());
-            }
-
-            for (Map.Entry<String, Object> entry : txn.writeSet.entrySet()) {
-                store.update(entry.getKey(), entry.getValue());
-            }
-            
-            return CommitResult.success(0);
-
-        } finally {
-            lockManager.releaseAll(txn);
-            commitLock.unlock();
+        if (txn.status != TxStatus.ACTIVE) {
+            return CommitResult.failure("Transaction already " + txn.status);
         }
+        txn.status = TxStatus.COMMITTED;
+        return CommitResult.success(txn.startTs);
     }
 
     @Override
     public void rollback(Transaction txn, KVStore store) {
-        boolean shouldReleaseLocks = false;
-        synchronized (txn) {
-            if (txn.status == TxStatus.ACTIVE) {
-                txn.status = TxStatus.ABORTED;
-                shouldReleaseLocks = true;
+        if (txn.status != TxStatus.ACTIVE) return;
+        txn.status = TxStatus.ABORTED;
+
+        if (txn.meta.get(SEQ_KEY) == null) return;
+
+        long txnSeq = (long) txn.meta.get(SEQ_KEY);
+
+        for (String key : txn.writeSet.keySet()) {
+            VersionChain vc = multiVersionStore.get(key);
+            if (vc != null) {
+                Version versionToAbort = vc.versions.get(txnSeq);
+                if (versionToAbort != null && versionToAbort.status() == VersionStatus.SPECULATIVE) {
+                    vc.versions.replace(txnSeq, versionToAbort, versionToAbort.asAborted());
+                }
             }
         }
-        
-        if (shouldReleaseLocks) {
-            lockManager.releaseAll(txn);
+    }
+
+    private void assignSequence(Transaction txn, String key) {
+        if (txn.meta.get(SEQ_KEY) == null) {
+            synchronized (txn) {
+                if (txn.meta.get(SEQ_KEY) == null) {
+                    int partitionId = getPartitionIdFromKey(key);
+                    Scheduler scheduler = schedulers.computeIfAbsent(partitionId, k -> new Scheduler());
+                    long seq = scheduler.seqCounter.getAndIncrement();
+                    txn.meta.put(SEQ_KEY, seq);
+                }
+            }
         }
+    }
+
+    private VersionType classifyWrite(String key) {
+        if (key.endsWith("_ytd") || key.endsWith("_bal")) {
+            return VersionType.DELTA;
+        }
+        return VersionType.ABSOLUTE;
+    }
+
+    private int getPartitionIdFromKey(String key) {
+        String[] parts = key.split("_");
+        if (parts.length > 1 && (parts[0].equals("w") || parts[0].equals("d") || parts[0].equals("s") || parts[0].equals("c") || parts[0].equals("o"))) {
+            try {
+                return Integer.parseInt(parts[1]);
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+        return 0;
     }
 }

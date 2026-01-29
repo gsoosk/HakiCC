@@ -105,7 +105,7 @@ def get_propose_prompt_with_transactions2(transactions: list[str], inspiration_t
     IMPORTANT:
         - This concurrency control protocol is optimized for a set of pre-known transaction types. 
         - Use the provided pre-defined transactions code to optimize your protocol design. 
-        - You have access to the full code of these transactions. provided in the <transactions> tag.
+        - You have access to the full code of these transactions. provided in the <transactions>...</transactions> tag.
         - FOR EXAMPLE: you can skip lock for specific keys, reorder locks, use commutative properties, or any other optimization that can make the protocol more efficient for these transactions. 
             Try any optimization that can make the protocol more efficient for these transactions.
     
@@ -378,7 +378,7 @@ def get_generate_prompt_java() -> str:
     Your task is to implement a concurrency control protocol in Java based on the provided codebase.
     To do this, you will be provided with Java interface files as a guide for implementing a concurrency control protocol. 
     Eventually, you'll create a concrete class that extends the abstract class ConcurrencyControl, 
-        implementing the required methods (begin, write, read, commit, and rollback) in a way that conforms to concurrency control principles.
+    implementing the required methods (begin, write, read, commit, and rollback) in a way that conforms to concurrency control principles.
     We'll proceed step by step.
 
     Step 1: Understand the codebase
