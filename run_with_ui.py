@@ -41,8 +41,10 @@ def format_content_for_markdown(content: str, language: str = "python") -> str:
     return (
         content.replace("<execute>", f"```{code_lang}")
         .replace("</execute>", "```")
-        .replace("<observe>", "```")
+        .replace("<observe>", "```json")
         .replace("</observe>", "```")
+        .replace("<transactions>", f"```java")
+        .replace("</transactions>", "```")
     )
 
 def get_message_text(message: Any) -> str:
@@ -107,7 +109,7 @@ def get_streamlit_cb(parent_container: DeltaGenerator) -> BaseCallbackHandler:
                 for human_msg in reversed(human_messages):
                     human_text = get_message_plain_text(human_msg)
                     h = self.parent_container.chat_message("user")
-                    h.text(human_text)
+                    h.write(format_content_for_markdown(human_text))
 
                 
                 self.reset_containers()
@@ -192,7 +194,7 @@ if uploaded_pdf is not None:
 # Language mode selector
 language_mode = st.selectbox(
     "Target Language", 
-    options=["python", "java"],
+    options=["java", "python"],
     index=0,
     help="Select the programming language for generated concurrency control code"
 )

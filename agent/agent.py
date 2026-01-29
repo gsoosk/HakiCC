@@ -355,7 +355,7 @@ class Agent:
                     correctness = metrics.get("correctness", 0.0)    
                     
                     if correctness >= 1.0:
-                        state["messages"].append(HumanMessage(content=f"All tests passed!\n{feedback}"))
+                        state["messages"].append(HumanMessage(content=f"All tests passed!\n ```json\n{feedback}\n```"))
                         state["next_step"] = "correct"
                         state["current_code"] = generated_path.read_text(encoding="utf-8")
                     else:

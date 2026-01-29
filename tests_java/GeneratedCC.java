@@ -1,239 +1,236 @@
 
 package tests_java;
 
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.Predicate;
 
+/**
+ * KeyType defines the semantic category of a key based on TPC-C access patterns.
+ */
+enum KeyType {
+    COMMUTATIVE_UPDATE,
+    CONDITIONAL_UPDATE_STOCK_QTY,
+    READ_ONLY_ITEM_PRICE,
+    DEFERRED_BLIND_WRITE_ORDER,
+    GENERAL_READ_WRITE;
+}
+
+/**
+ * KeyClassifier is a static utility to determine the KeyType of a given key.
+ */
+class KeyClassifier {
+    public static KeyType classify(String key) {
+        if (key.startsWith("s_")) {
+            return KeyType.CONDITIONAL_UPDATE_STOCK_QTY;
+        }
+        if (key.startsWith("item_")) {
+            return KeyType.READ_ONLY_ITEM_PRICE;
+        }
+        if (key.startsWith("o_")) {
+            return KeyType.DEFERRED_BLIND_WRITE_ORDER;
+        }
+        if (key.startsWith("c_") || key.startsWith("w_") || key.startsWith("d_")) {
+            return KeyType.COMMUTATIVE_UPDATE;
+        }
+        return KeyType.GENERAL_READ_WRITE;
+    }
+}
+
+/**
+ * Manages Strict Two-Phase Locks (S2PL).
+ */
+class LockManager {
+    private final ConcurrentHashMap<String, ReentrantLock> locks = new ConcurrentHashMap<>();
+    private static final long LOCK_TIMEOUT_MS = 10;
+
+    @SuppressWarnings("unchecked")
+    public boolean acquire(Transaction txn, String key) {
+        ReentrantLock lock = locks.computeIfAbsent(key, k -> new ReentrantLock());
+        Set<ReentrantLock> heldLocks = (Set<ReentrantLock>) txn.meta.get("HELD_LOCKS");
+        if (heldLocks.contains(lock)) {
+            return true;
+        }
+        try {
+            if (lock.tryLock(LOCK_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                heldLocks.add(lock);
+                return true;
+            } else {
+                txn.status = TxStatus.ABORTED;
+                return false;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            txn.status = TxStatus.ABORTED;
+            return false;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public void releaseAll(Transaction txn) {
+        Set<ReentrantLock> heldLocks = (Set<ReentrantLock>) txn.meta.get("HELD_LOCKS");
+        if (heldLocks != null) {
+            for (ReentrantLock lock : heldLocks) {
+                if (lock.isHeldByCurrentThread()) {
+                    lock.unlock();
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Implements the final, correct version of the Transaction-Aware Concurrency Control protocol.
+ */
 class GeneratedCC extends ConcurrencyControl {
-
     private final AtomicInteger txidCounter = new AtomicInteger(0);
-    private final ConcurrentHashMap<String, KeyMetadata> keyMetadataMap = new ConcurrentHashMap<>();
+    private final LockManager lockManager = new LockManager();
+    private final ReentrantLock commitLock = new ReentrantLock();
+
+    private static final String DELTA_BUFFER_KEY = "DELTA_BUFFER";
+    private static final String HELD_LOCKS_KEY = "HELD_LOCKS";
+    private static final String OCC_READS_KEY = "OCC_READS";
 
     public static ConcurrencyControl buildCc() {
         return new GeneratedCC();
     }
 
-    // Enum to represent the type of operation.
-    private enum OperationType {
-        ADD, SUBTRACT, SET
-    }
-
-    /**
-     * Represents a pending update to a key.
-     * These are stored in the KeyMetadata's pending list.
-     */
-    private static class UpdateIntent {
-        final int txid;
-        final OperationType op;
-        final Object value; // For SET, this is the value. For ADD/SUBTRACT, this is the delta.
-        final Predicate<Long> condition; // For conditional updates (e.g., stock level)
-        final AtomicReference<TxStatus> status; // Shared status with the parent transaction
-
-        UpdateIntent(int txid, OperationType op, Object value, Predicate<Long> condition, AtomicReference<TxStatus> status) {
-            this.txid = txid;
-            this.op = op;
-            this.value = value;
-            this.condition = condition;
-            this.status = status;
-        }
-    }
-
-    /**
-     * Per-key metadata managed by the CC protocol.
-     */
-    private static class KeyMetadata {
-        final AtomicInteger version = new AtomicInteger(0);
-        final ReentrantLock lock = new ReentrantLock(); // For exclusive operations like non-commutative writes
-        final ConcurrentLinkedQueue<UpdateIntent> pendingUpdates = new ConcurrentLinkedQueue<>();
-        // In a real system, a cleanup mechanism would be needed for the pendingUpdates queue.
-    }
-
     @Override
     public Transaction begin(KVStore store) {
         int txid = txidCounter.incrementAndGet();
-        Transaction txn = new Transaction(txid, txid);
-        // Use meta to store a shared status reference for all intents of this transaction
-        txn.meta.put("status_ref", new AtomicReference<>(TxStatus.ACTIVE));
+        Transaction txn = new Transaction(txid, 0);
+        txn.meta.put(DELTA_BUFFER_KEY, new ConcurrentHashMap<String, Long>());
+        txn.meta.put(HELD_LOCKS_KEY, ConcurrentHashMap.newKeySet());
+        txn.meta.put(OCC_READS_KEY, new ConcurrentHashMap<String, Integer>());
         return txn;
     }
 
-    private KeyMetadata getKeyMetadata(String key) {
-        return keyMetadataMap.computeIfAbsent(key, k -> new KeyMetadata());
-    }
-
     @Override
+    @SuppressWarnings("unchecked")
     public Object read(Transaction txn, String key, KVStore store) {
-        if (txn.status != TxStatus.ACTIVE) {
-            return null;
-        }
+        if (txn.status == TxStatus.ABORTED) return null;
 
-        // Read-your-own-writes: Check if we have a local write.
-        if (txn.writeSet.containsKey(key)) {
-            UpdateIntent ownIntent = (UpdateIntent) txn.writeSet.get(key);
-            if (ownIntent.op == OperationType.SET) {
-                return ownIntent.value;
+        KeyType type = KeyClassifier.classify(key);
+
+        switch (type) {
+            case GENERAL_READ_WRITE:
+            case CONDITIONAL_UPDATE_STOCK_QTY: {
+                if (!lockManager.acquire(txn, key)) return null;
+                Object value = store.get(key);
+                if (value == null) return null;
+                Integer intValue = (value instanceof AtomicLong) ? (int)((AtomicLong)value).get() : (Integer)value;
+                txn.readSet.put(key, intValue);
+                return intValue;
+            }
+            
+            case READ_ONLY_ITEM_PRICE: {
+                Object value = store.get(key);
+                if (value == null) return null;
+                Integer intValue = (value instanceof AtomicLong) ? (int)((AtomicLong)value).get() : (Integer)value;
+                txn.readSet.put(key, intValue);
+                return intValue;
+            }
+
+            case COMMUTATIVE_UPDATE: {
+                Object value = store.get(key);
+                if (value == null) return null;
+                Integer intValue = (value instanceof AtomicLong) ? (int)((AtomicLong)value).get() : (Integer)value;
+                ((ConcurrentHashMap<String, Integer>)txn.meta.get(OCC_READS_KEY)).put(key, intValue);
+                txn.readSet.put(key, intValue);
+                return intValue;
             }
         }
-
-        KeyMetadata metadata = getKeyMetadata(key);
-        
-        // Record the version for OCC validation at commit time.
-        txn.readSet.put(key, metadata.version.get());
-
-        Object baseValueObj = store.get(key);
-        long currentValue = 0;
-        if (baseValueObj instanceof AtomicLong) {
-            currentValue = ((AtomicLong) baseValueObj).get();
-        } else if (baseValueObj instanceof Number) {
-            currentValue = ((Number) baseValueObj).longValue();
-        }
-
-        // Apply committed deltas to reconstruct the current value.
-        for (UpdateIntent intent : metadata.pendingUpdates) {
-            if (intent.status.get() == TxStatus.COMMITTED) {
-                long delta = ((Number) intent.value).longValue();
-                if (intent.op == OperationType.ADD) {
-                    currentValue += delta;
-                } else if (intent.op == OperationType.SUBTRACT) {
-                    currentValue -= delta;
-                }
-            }
-        }
-        
-        // Apply this transaction's own uncommitted changes on top.
-        if (txn.writeSet.containsKey(key)) {
-             UpdateIntent ownIntent = (UpdateIntent) txn.writeSet.get(key);
-             long delta = ((Number) ownIntent.value).longValue();
-             if (ownIntent.op == OperationType.ADD) {
-                 currentValue += delta;
-             } else if (ownIntent.op == OperationType.SUBTRACT) {
-                 currentValue -= delta;
-             }
-        }
-        
-        return (int) currentValue;
+        return null; // Should be unreachable
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public void write(Transaction txn, String key, Object value, KVStore store) {
-        if (txn.status != TxStatus.ACTIVE) {
-            return;
-        }
+        if (txn.status == TxStatus.ABORTED) return;
 
-        Object oldValueObj = read(txn, key, store);
-        long oldValue = (oldValueObj instanceof Number) ? ((Number) oldValueObj).longValue() : 0;
-        long newValue = ((Number) value).longValue();
-        long delta = newValue - oldValue;
+        KeyType type = KeyClassifier.classify(key);
 
-        @SuppressWarnings("unchecked")
-        AtomicReference<TxStatus> statusRef = (AtomicReference<TxStatus>) txn.meta.get("status_ref");
-        UpdateIntent intent;
+        switch (type) {
+            case COMMUTATIVE_UPDATE:
+                ConcurrentHashMap<String, Long> deltaBuffer = (ConcurrentHashMap<String, Long>) txn.meta.get(DELTA_BUFFER_KEY);
+                Object oldValueObj = txn.readSet.get(key);
+                if (oldValueObj == null) {
+                    txn.writeSet.put(key, value);
+                    return;
+                }
+                long oldValue = ((Number) oldValueObj).longValue();
+                long newValue = ((Number) value).longValue();
+                long delta = newValue - oldValue;
+                deltaBuffer.merge(key, delta, Long::sum);
+                break;
 
-        // Semantic analysis of the write operation
-        if (key.startsWith("w_") || key.startsWith("d_") || key.startsWith("c_") || key.startsWith("d_") && key.endsWith("_next_oid")) {
-            // These are always commutative additions
-            intent = new UpdateIntent(txn.txid, OperationType.ADD, newValue - oldValue, null, statusRef);
-            getKeyMetadata(key).pendingUpdates.add(intent);
-            txn.writeSet.put(key, intent);
-        } else if (key.startsWith("s_")) {
-            // Stock updates are subtractions with a condition
-            Predicate<Long> stockCondition = stockLevel -> stockLevel >= 10;
-            intent = new UpdateIntent(txn.txid, OperationType.SUBTRACT, oldValue - newValue, stockCondition, statusRef);
-            getKeyMetadata(key).pendingUpdates.add(intent);
-            txn.writeSet.put(key, intent);
-        } else {
-            // All other writes are treated as non-commutative SETs
-            intent = new UpdateIntent(txn.txid, OperationType.SET, value, null, statusRef);
-            txn.writeSet.put(key, intent);
+            case DEFERRED_BLIND_WRITE_ORDER:
+            case CONDITIONAL_UPDATE_STOCK_QTY:
+            case GENERAL_READ_WRITE:
+            default:
+                txn.writeSet.put(key, value);
+                break;
         }
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public CommitResult commit(Transaction txn, KVStore store) {
-        if (txn.status != TxStatus.ACTIVE) {
-            return CommitResult.failure("Transaction already " + txn.status);
-        }
+        commitLock.lock();
+        try {
+            synchronized (txn) {
+                if (txn.status != TxStatus.ACTIVE) {
+                    return CommitResult.failure("Transaction already " + txn.status);
+                }
 
-        // --- PHASE 1: VALIDATION ---
+                ConcurrentHashMap<String, Integer> occReads = (ConcurrentHashMap<String, Integer>) txn.meta.get(OCC_READS_KEY);
+                for (Map.Entry<String, Integer> entry : occReads.entrySet()) {
+                    String key = entry.getKey();
+                    Integer readValue = entry.getValue();
+                    Object currentValObj = store.get(key);
+                    Integer currentValue = (currentValObj instanceof AtomicLong) ? (int)((AtomicLong)currentValObj).get() : (Integer)currentValObj;
 
-        // 1. Read-Set Validation (OCC)
-        for (String key : txn.readSet.keySet()) {
-            int readVersion = (int) txn.readSet.get(key);
-            int currentVersion = getKeyMetadata(key).version.get();
-            if (readVersion != currentVersion) {
-                rollback(txn, store);
-                return CommitResult.failure("Read-write conflict on key: " + key);
-            }
-        }
-
-        // 2. Conditional Write Validation
-        for (String key : txn.writeSet.keySet()) {
-            UpdateIntent intent = (UpdateIntent) txn.writeSet.get(key);
-            if (intent.condition != null) {
-                // Reconstruct value *without* this transaction's update to check condition
-                Object baseValueObj = store.get(key);
-                long projectedValue = (baseValueObj instanceof AtomicLong) ? ((AtomicLong) baseValueObj).get() : 0;
-
-                for (UpdateIntent pending : getKeyMetadata(key).pendingUpdates) {
-                    if (pending.txid != txn.txid && pending.status.get() == TxStatus.COMMITTED) {
-                        long delta = ((Number) pending.value).longValue();
-                        if (pending.op == OperationType.ADD) projectedValue += delta;
-                        else if (pending.op == OperationType.SUBTRACT) projectedValue -= delta;
+                    if (!readValue.equals(currentValue)) {
+                        txn.status = TxStatus.ABORTED;
+                        return CommitResult.failure("OCC validation failed for key: " + key);
                     }
                 }
-                // Now apply this transaction's update
-                long delta = ((Number) intent.value).longValue();
-                if (intent.op == OperationType.ADD) projectedValue += delta;
-                else if (intent.op == OperationType.SUBTRACT) projectedValue -= delta;
-                
-                if (!intent.condition.test(projectedValue)) {
-                    rollback(txn, store);
-                    return CommitResult.failure("Condition failed for key: " + key);
-                }
+                txn.status = TxStatus.COMMITTED;
             }
-        }
 
-        // --- PHASE 2: APPLY ---
-        
-        // Atomically mark the transaction as committed. This is the logical commit point.
-        @SuppressWarnings("unchecked")
-        AtomicReference<TxStatus> statusRef = (AtomicReference<TxStatus>) txn.meta.get("status_ref");
-        if (!statusRef.compareAndSet(TxStatus.ACTIVE, TxStatus.COMMITTED)) {
-             return CommitResult.failure("Transaction was aborted during commit");
-        }
-        txn.status = TxStatus.COMMITTED;
-
-        // Apply non-commutative writes and update versions
-        for (String key : txn.writeSet.keySet()) {
-            UpdateIntent intent = (UpdateIntent) txn.writeSet.get(key);
-            if (intent.op == OperationType.SET) {
-                KeyMetadata metadata = getKeyMetadata(key);
-                metadata.lock.lock();
-                try {
-                    store.update(key, intent.value);
-                    metadata.version.incrementAndGet();
-                } finally {
-                    metadata.lock.unlock();
-                }
+            ConcurrentHashMap<String, Long> deltaBuffer = (ConcurrentHashMap<String, Long>) txn.meta.get(DELTA_BUFFER_KEY);
+            for (Map.Entry<String, Long> entry : deltaBuffer.entrySet()) {
+                store.increment(entry.getKey(), entry.getValue());
             }
-        }
 
-        return CommitResult.success(txn.txid);
+            for (Map.Entry<String, Object> entry : txn.writeSet.entrySet()) {
+                store.update(entry.getKey(), entry.getValue());
+            }
+            
+            return CommitResult.success(0);
+
+        } finally {
+            lockManager.releaseAll(txn);
+            commitLock.unlock();
+        }
     }
 
     @Override
     public void rollback(Transaction txn, KVStore store) {
-        if (txn.status == TxStatus.ABORTED) {
-            return;
+        boolean shouldReleaseLocks = false;
+        synchronized (txn) {
+            if (txn.status == TxStatus.ACTIVE) {
+                txn.status = TxStatus.ABORTED;
+                shouldReleaseLocks = true;
+            }
         }
-        @SuppressWarnings("unchecked")
-        AtomicReference<TxStatus> statusRef = (AtomicReference<TxStatus>) txn.meta.get("status_ref");
-        statusRef.set(TxStatus.ABORTED);
-        txn.status = TxStatus.ABORTED;
+        
+        if (shouldReleaseLocks) {
+            lockManager.releaseAll(txn);
+        }
     }
 }

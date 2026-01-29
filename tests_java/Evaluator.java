@@ -1461,19 +1461,19 @@ public class Evaluator {
             metrics.put("correctness", 0.0);
 
             Map<String, Object> artifacts = new LinkedHashMap<>();
+            artifacts.put("error_type", e.getClass().getName());
+            artifacts.put("error_message", e.getMessage());
+
+            StringBuilder sb = new StringBuilder();
+            for (StackTraceElement elem : e.getStackTrace()) {
+                sb.append(elem.toString()).append("\n");
+            }
+            artifacts.put("full_traceback", sb.toString());
+
 
             if (!correctnessOnly) {
                 metrics.put("throughput", 0.0);
                 metrics.put("combined_score", 0.0);
-
-                artifacts.put("error_type", e.getClass().getName());
-                artifacts.put("error_message", e.getMessage());
-
-                StringBuilder sb = new StringBuilder();
-                for (StackTraceElement elem : e.getStackTrace()) {
-                    sb.append(elem.toString()).append("\n");
-                }
-                artifacts.put("full_traceback", sb.toString());
             }
 
             return new EvaluationResult(metrics, artifacts);

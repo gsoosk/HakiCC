@@ -459,11 +459,22 @@ def get_generate_prompt_java() -> str:
 def get_incorrect_code_prompt_java(feedback: str) -> str:
     """Prompt for fixing incorrect Java code."""
     prompt = f"""
-    Your previous Java code is incorrect. Please modify it to fix the issues.
+    Your previous code is INCORRECT. It does not meet all the requirements 
+    * serializability
+    * progress
+    * ensuring freedom from stalls
+
+
+    Rview the feedback metrics and artifacts provided below to identify and understand the specific issues in your code implementation.
+    Revise your code to address the issues.
+
+
     The feedback is as follows:
     <observe>
     {feedback}
     </observe>
+
+
     You are just fixing the bug/problem in the code. Do not change the design of the concurrency control protocol.
     Follow the initial design, just fix issues that can result in incorrect behavior.
     
