@@ -1,373 +1,239 @@
 
 package tests_java;
 
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Predicate;
 
-/**
- * Implementation of Optimistic Batch Aggregation (OBA).
- * This protocol combines optimistic concurrency control with batched, partitioned commits.
- * Transactions execute optimistically, reading versioned data. Writes are recorded
- * locally as deltas (for commutative operations) or final values. At commit time,
- * transactions are submitted to a dedicated, single-threaded worker for their data
- * partition (based on warehouse ID). The worker processes transactions in batches:
- * it validates all transactions in the batch, aggregates the deltas of the valid
- * ones, applies the aggregated changes to the database in a single burst, and
- * then notifies the client threads. This minimizes database contention and I/O
- * by turning many small writes into a few large, atomic updates.
- */
 class GeneratedCC extends ConcurrencyControl {
 
-    private static final int BATCH_SIZE = 200;
-    private static final int BATCH_TIMEOUT_MS = 2;
-    private static final Pattern WAREHOUSE_KEY_PATTERN = Pattern.compile("^[a-z]_(\\d+)_.*");
+    private final AtomicInteger txidCounter = new AtomicInteger(0);
+    private final ConcurrentHashMap<String, KeyMetadata> keyMetadataMap = new ConcurrentHashMap<>();
 
-    // A wrapper to add a version number to every value for OCC.
-    private static class VersionedValue {
-        volatile Object value;
-        final AtomicLong version = new AtomicLong(0);
-
-        VersionedValue(Object value) {
-            this.value = value;
-        }
-    }
-    
-    // A request submitted to a partition worker's queue.
-    private static class TransactionRequest {
-        final Transaction txn;
-        final CompletableFuture<CommitResult> future;
-
-        TransactionRequest(Transaction txn, CompletableFuture<CommitResult> future) {
-            this.txn = txn;
-            this.future = future;
-        }
-    }
-    
-    private final AtomicInteger nextTxid = new AtomicInteger(0);
-    // The main data store, holding versioned values. Managed by this CC protocol.
-    private static final ConcurrentHashMap<String, VersionedValue> versionedStore = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<Integer, AtomicLong> districtNextOid = new ConcurrentHashMap<>();
-    private static volatile boolean isInitialized = false;
-
-    private final ConcurrentHashMap<Integer, PartitionWorker> partitions = new ConcurrentHashMap<>();
-    
     public static ConcurrencyControl buildCc() {
         return new GeneratedCC();
     }
 
-    public GeneratedCC() {
-        // Ensure data is initialized only once.
-        synchronized (GeneratedCC.class) {
-            if (!isInitialized) {
-                initVersionedData();
-                isInitialized = true;
-            }
+    // Enum to represent the type of operation.
+    private enum OperationType {
+        ADD, SUBTRACT, SET
+    }
+
+    /**
+     * Represents a pending update to a key.
+     * These are stored in the KeyMetadata's pending list.
+     */
+    private static class UpdateIntent {
+        final int txid;
+        final OperationType op;
+        final Object value; // For SET, this is the value. For ADD/SUBTRACT, this is the delta.
+        final Predicate<Long> condition; // For conditional updates (e.g., stock level)
+        final AtomicReference<TxStatus> status; // Shared status with the parent transaction
+
+        UpdateIntent(int txid, OperationType op, Object value, Predicate<Long> condition, AtomicReference<TxStatus> status) {
+            this.txid = txid;
+            this.op = op;
+            this.value = value;
+            this.condition = condition;
+            this.status = status;
         }
+    }
+
+    /**
+     * Per-key metadata managed by the CC protocol.
+     */
+    private static class KeyMetadata {
+        final AtomicInteger version = new AtomicInteger(0);
+        final ReentrantLock lock = new ReentrantLock(); // For exclusive operations like non-commutative writes
+        final ConcurrentLinkedQueue<UpdateIntent> pendingUpdates = new ConcurrentLinkedQueue<>();
+        // In a real system, a cleanup mechanism would be needed for the pendingUpdates queue.
     }
 
     @Override
     public Transaction begin(KVStore store) {
-        return new Transaction(nextTxid.getAndIncrement(), 0);
+        int txid = txidCounter.incrementAndGet();
+        Transaction txn = new Transaction(txid, txid);
+        // Use meta to store a shared status reference for all intents of this transaction
+        txn.meta.put("status_ref", new AtomicReference<>(TxStatus.ACTIVE));
+        return txn;
+    }
+
+    private KeyMetadata getKeyMetadata(String key) {
+        return keyMetadataMap.computeIfAbsent(key, k -> new KeyMetadata());
     }
 
     @Override
     public Object read(Transaction txn, String key, KVStore store) {
-        if (txn.status != TxStatus.ACTIVE) return null;
-
-        // Optimization: _next_oid is handled by a dedicated atomic counter to avoid
-        // making it a high-contention point for OCC validation.
-        if (key.endsWith("_next_oid")) {
-            int districtId = getDistrictId(key);
-            long nextId = districtNextOid.computeIfAbsent(districtId, k -> new AtomicLong(1)).get();
-            txn.readSet.put(key, nextId); // Store value, but it won't be version-validated
-            return nextId;
+        if (txn.status != TxStatus.ACTIVE) {
+            return null;
         }
 
-        VersionedValue vv = versionedStore.get(key);
-        if (vv == null) return null;
+        // Read-your-own-writes: Check if we have a local write.
+        if (txn.writeSet.containsKey(key)) {
+            UpdateIntent ownIntent = (UpdateIntent) txn.writeSet.get(key);
+            if (ownIntent.op == OperationType.SET) {
+                return ownIntent.value;
+            }
+        }
 
-        txn.readSet.put(key, vv.version.get()); // Store version for validation
-        return vv.value;
+        KeyMetadata metadata = getKeyMetadata(key);
+        
+        // Record the version for OCC validation at commit time.
+        txn.readSet.put(key, metadata.version.get());
+
+        Object baseValueObj = store.get(key);
+        long currentValue = 0;
+        if (baseValueObj instanceof AtomicLong) {
+            currentValue = ((AtomicLong) baseValueObj).get();
+        } else if (baseValueObj instanceof Number) {
+            currentValue = ((Number) baseValueObj).longValue();
+        }
+
+        // Apply committed deltas to reconstruct the current value.
+        for (UpdateIntent intent : metadata.pendingUpdates) {
+            if (intent.status.get() == TxStatus.COMMITTED) {
+                long delta = ((Number) intent.value).longValue();
+                if (intent.op == OperationType.ADD) {
+                    currentValue += delta;
+                } else if (intent.op == OperationType.SUBTRACT) {
+                    currentValue -= delta;
+                }
+            }
+        }
+        
+        // Apply this transaction's own uncommitted changes on top.
+        if (txn.writeSet.containsKey(key)) {
+             UpdateIntent ownIntent = (UpdateIntent) txn.writeSet.get(key);
+             long delta = ((Number) ownIntent.value).longValue();
+             if (ownIntent.op == OperationType.ADD) {
+                 currentValue += delta;
+             } else if (ownIntent.op == OperationType.SUBTRACT) {
+                 currentValue -= delta;
+             }
+        }
+        
+        return (int) currentValue;
     }
 
     @Override
     public void write(Transaction txn, String key, Object value, KVStore store) {
-        if (txn.status != TxStatus.ACTIVE) return;
-
-        // Optimization for _next_oid
-        if (key.endsWith("_next_oid")) {
-            int districtId = getDistrictId(key);
-            districtNextOid.get(districtId).set(((Number) value).longValue());
-            // No need to add to writeset, it's applied immediately and atomically.
+        if (txn.status != TxStatus.ACTIVE) {
             return;
         }
 
-        // Semantic analysis: store deltas for commutative operations
-        if (isCommutativeKey(key)) {
-            Object oldValueObj = read(txn, key, store);
-            if (oldValueObj instanceof Number) {
-                long oldValue = ((Number) oldValueObj).longValue();
-                long newValue = ((Number) value).longValue();
-                long delta = newValue - oldValue;
-                txn.writeSet.put(key, delta);
-                return;
-            }
+        Object oldValueObj = read(txn, key, store);
+        long oldValue = (oldValueObj instanceof Number) ? ((Number) oldValueObj).longValue() : 0;
+        long newValue = ((Number) value).longValue();
+        long delta = newValue - oldValue;
+
+        @SuppressWarnings("unchecked")
+        AtomicReference<TxStatus> statusRef = (AtomicReference<TxStatus>) txn.meta.get("status_ref");
+        UpdateIntent intent;
+
+        // Semantic analysis of the write operation
+        if (key.startsWith("w_") || key.startsWith("d_") || key.startsWith("c_") || key.startsWith("d_") && key.endsWith("_next_oid")) {
+            // These are always commutative additions
+            intent = new UpdateIntent(txn.txid, OperationType.ADD, newValue - oldValue, null, statusRef);
+            getKeyMetadata(key).pendingUpdates.add(intent);
+            txn.writeSet.put(key, intent);
+        } else if (key.startsWith("s_")) {
+            // Stock updates are subtractions with a condition
+            Predicate<Long> stockCondition = stockLevel -> stockLevel >= 10;
+            intent = new UpdateIntent(txn.txid, OperationType.SUBTRACT, oldValue - newValue, stockCondition, statusRef);
+            getKeyMetadata(key).pendingUpdates.add(intent);
+            txn.writeSet.put(key, intent);
+        } else {
+            // All other writes are treated as non-commutative SETs
+            intent = new UpdateIntent(txn.txid, OperationType.SET, value, null, statusRef);
+            txn.writeSet.put(key, intent);
         }
-        
-        // Default: store the final value for non-commutative overwrites
-        txn.writeSet.put(key, value);
     }
 
     @Override
     public CommitResult commit(Transaction txn, KVStore store) {
         if (txn.status != TxStatus.ACTIVE) {
-            return CommitResult.failure("Transaction not active.");
+            return CommitResult.failure("Transaction already " + txn.status);
         }
 
-        // Read-only or next_oid-only transactions can commit immediately.
-        if (txn.writeSet.isEmpty()) {
-            txn.status = TxStatus.COMMITTED;
-            return CommitResult.success(0);
+        // --- PHASE 1: VALIDATION ---
+
+        // 1. Read-Set Validation (OCC)
+        for (String key : txn.readSet.keySet()) {
+            int readVersion = (int) txn.readSet.get(key);
+            int currentVersion = getKeyMetadata(key).version.get();
+            if (readVersion != currentVersion) {
+                rollback(txn, store);
+                return CommitResult.failure("Read-write conflict on key: " + key);
+            }
         }
 
-        int partitionId = getPartitionIdFromTxn(txn);
-        PartitionWorker worker = partitions.computeIfAbsent(partitionId, id -> new PartitionWorker());
+        // 2. Conditional Write Validation
+        for (String key : txn.writeSet.keySet()) {
+            UpdateIntent intent = (UpdateIntent) txn.writeSet.get(key);
+            if (intent.condition != null) {
+                // Reconstruct value *without* this transaction's update to check condition
+                Object baseValueObj = store.get(key);
+                long projectedValue = (baseValueObj instanceof AtomicLong) ? ((AtomicLong) baseValueObj).get() : 0;
+
+                for (UpdateIntent pending : getKeyMetadata(key).pendingUpdates) {
+                    if (pending.txid != txn.txid && pending.status.get() == TxStatus.COMMITTED) {
+                        long delta = ((Number) pending.value).longValue();
+                        if (pending.op == OperationType.ADD) projectedValue += delta;
+                        else if (pending.op == OperationType.SUBTRACT) projectedValue -= delta;
+                    }
+                }
+                // Now apply this transaction's update
+                long delta = ((Number) intent.value).longValue();
+                if (intent.op == OperationType.ADD) projectedValue += delta;
+                else if (intent.op == OperationType.SUBTRACT) projectedValue -= delta;
+                
+                if (!intent.condition.test(projectedValue)) {
+                    rollback(txn, store);
+                    return CommitResult.failure("Condition failed for key: " + key);
+                }
+            }
+        }
+
+        // --- PHASE 2: APPLY ---
         
-        CompletableFuture<CommitResult> future = new CompletableFuture<>();
-        txn.meta.put("future", future);
-        worker.submit(new TransactionRequest(txn, future));
-
-        try {
-            return future.get(); // Block and wait for the worker to process the batch
-        } catch (InterruptedException | ExecutionException e) {
-            txn.status = TxStatus.ABORTED;
-            return CommitResult.failure("Commit interrupted or failed: " + e.getMessage());
+        // Atomically mark the transaction as committed. This is the logical commit point.
+        @SuppressWarnings("unchecked")
+        AtomicReference<TxStatus> statusRef = (AtomicReference<TxStatus>) txn.meta.get("status_ref");
+        if (!statusRef.compareAndSet(TxStatus.ACTIVE, TxStatus.COMMITTED)) {
+             return CommitResult.failure("Transaction was aborted during commit");
         }
+        txn.status = TxStatus.COMMITTED;
+
+        // Apply non-commutative writes and update versions
+        for (String key : txn.writeSet.keySet()) {
+            UpdateIntent intent = (UpdateIntent) txn.writeSet.get(key);
+            if (intent.op == OperationType.SET) {
+                KeyMetadata metadata = getKeyMetadata(key);
+                metadata.lock.lock();
+                try {
+                    store.update(key, intent.value);
+                    metadata.version.incrementAndGet();
+                } finally {
+                    metadata.lock.unlock();
+                }
+            }
+        }
+
+        return CommitResult.success(txn.txid);
     }
 
     @Override
     public void rollback(Transaction txn, KVStore store) {
-        if (txn.status != TxStatus.ACTIVE) return;
+        if (txn.status == TxStatus.ABORTED) {
+            return;
+        }
+        @SuppressWarnings("unchecked")
+        AtomicReference<TxStatus> statusRef = (AtomicReference<TxStatus>) txn.meta.get("status_ref");
+        statusRef.set(TxStatus.ABORTED);
         txn.status = TxStatus.ABORTED;
-        
-        CompletableFuture<CommitResult> future = (CompletableFuture<CommitResult>) txn.meta.get("future");
-        if (future != null) {
-            future.completeExceptionally(new RuntimeException("Transaction rolled back by client."));
-        }
-    }
-
-    public void shutdown() {
-        partitions.values().forEach(PartitionWorker::shutdown);
-    }
-    
-    // --- Helper Methods & Classes ---
-
-    private boolean isCommutativeKey(String key) {
-        return key.endsWith("_ytd") || key.endsWith("_bal") || key.endsWith("_qty");
-    }
-
-    private int getWarehouseId(String key) {
-        Matcher matcher = WAREHOUSE_KEY_PATTERN.matcher(key);
-        if (matcher.matches()) {
-            return Integer.parseInt(matcher.group(1));
-        }
-        return 0; // Global partition for non-warehouse keys like "item_..."
-    }
-    
-    private int getDistrictId(String key) {
-        // A simple hash-based unique ID for district keys like "d_wid_did_next_oid"
-        String[] parts = key.split("_");
-        if (parts.length > 2) {
-            return Integer.parseInt(parts[1]) * 100 + Integer.parseInt(parts[2]);
-        }
-        return key.hashCode();
-    }
-
-    private int getPartitionIdFromTxn(Transaction txn) {
-        // Find the first key in either set to determine the partition
-        if (!txn.readSet.isEmpty()) {
-            return getWarehouseId(txn.readSet.keys().nextElement());
-        }
-        if (!txn.writeSet.isEmpty()) {
-            return getWarehouseId(txn.writeSet.keys().nextElement());
-        }
-        return 0; // Default to global partition
-    }
-
-    private static class PartitionWorker implements Runnable {
-        private final BlockingQueue<TransactionRequest> queue = new LinkedBlockingQueue<>();
-        private volatile boolean running = true;
-
-        PartitionWorker() {
-            Thread workerThread = new Thread(this, "PartitionWorker-" + this.hashCode());
-            workerThread.setDaemon(true);
-            workerThread.start();
-        }
-
-        void submit(TransactionRequest request) {
-            if (running) {
-                queue.add(request);
-            } else {
-                request.future.complete(CommitResult.failure("System is shutting down."));
-            }
-        }
-
-        void shutdown() {
-            running = false;
-        }
-
-        @Override
-        public void run() {
-            List<TransactionRequest> batch = new ArrayList<>(BATCH_SIZE);
-            while (running) {
-                try {
-                    // Drain the queue to form a batch
-                    Queues.drain(queue, batch, BATCH_SIZE, BATCH_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-                    if (!batch.isEmpty()) {
-                        processBatch(batch);
-                        batch.clear();
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    running = false;
-                }
-            }
-        }
-
-        private void processBatch(List<TransactionRequest> batch) {
-            Set<Transaction> failedTxs = new HashSet<>();
-            Map<String, Long> aggregatedDeltas = new HashMap<>();
-            Map<String, Object> aggregatedOverwrites = new HashMap<>();
-            Set<String> writtenKeys = new HashSet<>();
-
-            // Phase 1: Validation
-            for (TransactionRequest req : batch) {
-                Transaction txn = req.txn;
-                for (Map.Entry<String, Object> readEntry : txn.readSet.entrySet()) {
-                    String key = readEntry.getKey();
-                    if (key.endsWith("_next_oid")) continue; // Skip validation for this key
-
-                    long readVersion = (Long) readEntry.getValue();
-                    VersionedValue currentVv = versionedStore.get(key);
-                    if (currentVv == null || currentVv.version.get() != readVersion) {
-                        failedTxs.add(txn);
-                        break; // No need to validate further for this txn
-                    }
-                }
-            }
-
-            // Phase 2: Aggregation
-            for (TransactionRequest req : batch) {
-                if (!failedTxs.contains(req.txn)) {
-                    for (Map.Entry<String, Object> writeEntry : req.txn.writeSet.entrySet()) {
-                        String key = writeEntry.getKey();
-                        Object value = writeEntry.getValue();
-                        writtenKeys.add(key);
-
-                        if (value instanceof Long && isCommutativeKey(key)) {
-                            aggregatedDeltas.merge(key, (Long) value, Long::sum);
-                        } else {
-                            // Last writer in the batch wins for non-commutative writes
-                            aggregatedOverwrites.put(key, value);
-                        }
-                    }
-                }
-            }
-
-            // Phase 3: Materialization
-            for (Map.Entry<String, Long> entry : aggregatedDeltas.entrySet()) {
-                VersionedValue vv = versionedStore.get(entry.getKey());
-                if (vv != null && vv.value instanceof Long) {
-                    vv.value = ((Long) vv.value) + entry.getValue();
-                }
-            }
-            for (Map.Entry<String, Object> entry : aggregatedOverwrites.entrySet()) {
-                 VersionedValue vv = versionedStore.get(entry.getKey());
-                 if (vv != null) {
-                    vv.value = entry.getValue();
-                 }
-            }
-            // Increment versions for all written keys
-            for (String key : writtenKeys) {
-                VersionedValue vv = versionedStore.get(key);
-                if (vv != null) {
-                    vv.version.incrementAndGet();
-                }
-            }
-
-
-            // Phase 4: Notification
-            for (TransactionRequest req : batch) {
-                if (failedTxs.contains(req.txn)) {
-                    req.txn.status = TxStatus.ABORTED;
-                    req.future.complete(CommitResult.failure("Validation failed."));
-                } else {
-                    req.txn.status = TxStatus.COMMITTED;
-                    req.future.complete(CommitResult.success(0));
-                }
-            }
-        }
-         private boolean isCommutativeKey(String key) {
-            return key.endsWith("_ytd") || key.endsWith("_bal") || key.endsWith("_qty");
-        }
-    }
-
-    private static void initVersionedData() {
-        // This is a simplified, non-concurrent initialization.
-        // Constants matching the provided transaction generator code.
-        int TPCC_NUM_WAREHOUSES = 10;
-        int TPCC_DISTRICTS_PER_WH = 10;
-        int TPCC_CUSTOMERS_PER_DIST = 3000;
-        int TPCC_NUM_ITEMS = 100000;
-        long TPCC_INITIAL_YTD = 300000;
-        long TPCC_INITIAL_BALANCE = -10;
-        long TPCC_INITIAL_STOCK = 100;
-
-        Random rand = new Random(42);
-
-        for (int wid = 1; wid <= TPCC_NUM_WAREHOUSES; wid++) {
-            versionedStore.put("w_" + wid + "_ytd", new VersionedValue(TPCC_INITIAL_YTD));
-            for (int did = 1; did <= TPCC_DISTRICTS_PER_WH; did++) {
-                versionedStore.put("d_" + wid + "_" + did + "_ytd", new VersionedValue(TPCC_INITIAL_YTD));
-                int districtId = wid * 100 + did;
-                districtNextOid.put(districtId, new AtomicLong(1));
-                for (int cid = 1; cid <= TPCC_CUSTOMERS_PER_DIST; cid++) {
-                    versionedStore.put("c_" + wid + "_" + did + "_" + cid + "_bal", new VersionedValue(TPCC_INITIAL_BALANCE));
-                    versionedStore.put("c_" + wid + "_" + did + "_" + cid + "_ytd", new VersionedValue(TPCC_INITIAL_YTD));
-                }
-            }
-        }
-        for (int iid = 1; iid <= TPCC_NUM_ITEMS; iid++) {
-            versionedStore.put("item_" + iid + "_price", new VersionedValue(rand.nextInt(9901) + 100));
-        }
-        for (int wid = 1; wid <= TPCC_NUM_WAREHOUSES; wid++) {
-            for (int iid = 1; iid <= TPCC_NUM_ITEMS; iid++) {
-                versionedStore.put("s_" + wid + "_" + iid + "_qty", new VersionedValue(TPCC_INITIAL_STOCK));
-            }
-        }
-    }
-}
-
-// A helper class for BlockingQueue that is not part of the standard Java library until Java 9+.
-// This is included to ensure compatibility with older Java versions.
-final class Queues {
-    private Queues() {}
-    static <E> int drain(BlockingQueue<E> q, Collection<? super E> c, int maxElements, long timeout, TimeUnit unit) throws InterruptedException {
-        long deadline = System.nanoTime() + unit.toNanos(timeout);
-        int added = 0;
-        while (added < maxElements) {
-            added += q.drainTo(c, maxElements - added);
-            if (added < maxElements) {
-                E e = q.poll(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
-                if (e == null) break;
-                c.add(e);
-                added++;
-            }
-        }
-        return added;
     }
 }

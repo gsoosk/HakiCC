@@ -1323,6 +1323,10 @@ public class Evaluator {
     // ---------- Main evaluate method ----------
 
     public static EvaluationResult evaluate(Supplier<ConcurrencyControl> ccFactory) {
+        return evaluate(ccFactory, false);
+    }
+
+    public static EvaluationResult evaluate(Supplier<ConcurrencyControl> ccFactory, boolean correctnessOnly) {
         try {
             Map<String, ScenarioResult> scenarios = new LinkedHashMap<>();
 
@@ -1332,7 +1336,7 @@ public class Evaluator {
             scenarios.put("deadlock", runScenario(ccFactory, Evaluator::wlDeadlockProne, 64, 5.0, 0.2, null));
 
             // TPC-C with default 8 warehouses (for backwards compatibility)
-            scenarios.put("tpcc", runScenario(ccFactory, Evaluator::wlTpcc, 64, 5.0, 0.5, Evaluator::initTpccData));
+            // scenarios.put("tpcc", runScenario(ccFactory, Evaluator::wlTpcc, 64, 5.0, 0.5, Evaluator::initTpccData));
 
             // TPC-C with different warehouse counts (scalability benchmark)
             int[] warehouseCounts = {1, 2, 4, 8, 16};
@@ -1382,7 +1386,8 @@ public class Evaluator {
 
                 boolean serializable = !s.hasCycle;
                 boolean stallFree = s.stalledThreads == 0;
-                boolean isOk = serializable && stallFree;
+                boolean progressMade = s.committed > 100;
+                boolean isOk = serializable && stallFree && progressMade;
 
                 throughputs.put(name, s.throughput);
 
@@ -1401,46 +1406,52 @@ public class Evaluator {
             }
 
             double correctness = totalScenarios > 0 ? (double) correct / totalScenarios : 0.0;
-            double avgThroughput = weightedScenarios > 0 ? totalThroughput / weightedScenarios : 0.0;
-
-            // Map throughput to a bounded score
-            double throughputScore = avgThroughput / (100000.0 + avgThroughput);
-
-            double combinedScore = 0.5 * correctness + 0.5 * throughputScore;
 
             Map<String, Object> metrics = new LinkedHashMap<>();
             metrics.put("correctness", correctness);
-            metrics.put("throughput_score", throughputScore);
-            metrics.put("combined_score", combinedScore);
-            metrics.put("pre_known_transactions_throughput", throughputs.get("tpcc"));
 
-            // Add warehouse scalability summary
-            Map<String, Double> warehouseScalability = new LinkedHashMap<>();
-            for (int whCount : warehouseCounts) {
-                String key = "tpcc_wh" + whCount;
-                if (throughputs.containsKey(key)) {
-                    warehouseScalability.put(key, throughputs.get(key));
-                }
-            }
-            metrics.put("warehouse_scalability", warehouseScalability);
+            Map<String, Object> artifacts = new LinkedHashMap<>();
 
-            // Add contention impact summary
-            Map<String, Double> contentionImpact = new LinkedHashMap<>();
-            for (String level : contentionLevels) {
-                String key = "tpcc_contention_" + level;
-                if (throughputs.containsKey(key)) {
-                    contentionImpact.put(key, throughputs.get(key));
-                }
-            }
-            metrics.put("contention_impact", contentionImpact);
-
+            // Always include scenario summaries
             Map<String, Object> scenarioSummaries = new LinkedHashMap<>();
             for (Map.Entry<String, ScenarioResult> entry : scenarios.entrySet()) {
                 scenarioSummaries.put(entry.getKey(), entry.getValue().toMap());
             }
-
-            Map<String, Object> artifacts = new LinkedHashMap<>();
             artifacts.put("scenario_summaries", scenarioSummaries);
+
+            // Only add other metrics if not in correctness-only mode
+            if (!correctnessOnly) {
+                double avgThroughput = weightedScenarios > 0 ? totalThroughput / weightedScenarios : 0.0;
+
+                // Map throughput to a bounded score
+                double throughputScore = avgThroughput / (100000.0 + avgThroughput);
+
+                double combinedScore = 0.5 * correctness + 0.5 * throughputScore;
+
+                metrics.put("throughput_score", throughputScore);
+                metrics.put("combined_score", combinedScore);
+                metrics.put("pre_known_transactions_throughput", throughputs.get("tpcc"));
+
+                // Add warehouse scalability summary
+                Map<String, Double> warehouseScalability = new LinkedHashMap<>();
+                for (int whCount : warehouseCounts) {
+                    String key = "tpcc_wh" + whCount;
+                    if (throughputs.containsKey(key)) {
+                        warehouseScalability.put(key, throughputs.get(key));
+                    }
+                }
+                metrics.put("warehouse_scalability", warehouseScalability);
+
+                // Add contention impact summary
+                Map<String, Double> contentionImpact = new LinkedHashMap<>();
+                for (String level : contentionLevels) {
+                    String key = "tpcc_contention_" + level;
+                    if (throughputs.containsKey(key)) {
+                        contentionImpact.put(key, throughputs.get(key));
+                    }
+                }
+                metrics.put("contention_impact", contentionImpact);
+            }
 
             return new EvaluationResult(metrics, artifacts);
 
@@ -1448,18 +1459,22 @@ public class Evaluator {
             e.printStackTrace();
             Map<String, Object> metrics = new LinkedHashMap<>();
             metrics.put("correctness", 0.0);
-            metrics.put("throughput", 0.0);
-            metrics.put("combined_score", 0.0);
 
             Map<String, Object> artifacts = new LinkedHashMap<>();
-            artifacts.put("error_type", e.getClass().getName());
-            artifacts.put("error_message", e.getMessage());
 
-            StringBuilder sb = new StringBuilder();
-            for (StackTraceElement elem : e.getStackTrace()) {
-                sb.append(elem.toString()).append("\n");
+            if (!correctnessOnly) {
+                metrics.put("throughput", 0.0);
+                metrics.put("combined_score", 0.0);
+
+                artifacts.put("error_type", e.getClass().getName());
+                artifacts.put("error_message", e.getMessage());
+
+                StringBuilder sb = new StringBuilder();
+                for (StackTraceElement elem : e.getStackTrace()) {
+                    sb.append(elem.toString()).append("\n");
+                }
+                artifacts.put("full_traceback", sb.toString());
             }
-            artifacts.put("full_traceback", sb.toString());
 
             return new EvaluationResult(metrics, artifacts);
         }
@@ -1556,18 +1571,24 @@ public class Evaluator {
 
     public static void main(String[] args) {
         String outputFile = "output.json";
+        boolean correctnessOnly = false;
         
-        // Parse arguments for output file path
+        // Parse arguments
         for (int i = 0; i < args.length; i++) {
             if ("--output".equals(args[i]) && i + 1 < args.length) {
                 outputFile = args[i + 1];
                 i++;
+            } else if ("--correctness-only".equals(args[i])) {
+                correctnessOnly = true;
             }
         }
 
         System.out.println("Running evaluator with GeneratedCC...");
+        if (correctnessOnly) {
+            System.out.println("Correctness-only mode enabled: only correctness metric will be reported.");
+        }
 
-        EvaluationResult result = evaluate(GeneratedCC::buildCc);
+        EvaluationResult result = evaluate(GeneratedCC::buildCc, correctnessOnly);
 
         System.out.println("Evaluation complete.");
         System.out.println("Metrics: " + result.metrics);

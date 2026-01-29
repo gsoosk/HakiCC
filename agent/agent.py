@@ -327,7 +327,7 @@ class Agent:
             try:
                 # Run the evaluator script
                 result = subprocess.run(
-                    ["bash", str(run_script), str(generated_path), str(output_json_path)],
+                    ["bash", str(run_script), '--correctness-only', str(generated_path), str(output_json_path)],
                     cwd=str(java_dir),
                     capture_output=True,
                     text=True,

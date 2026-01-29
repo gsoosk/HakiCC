@@ -45,10 +45,10 @@ import java.util.regex.Pattern;
 // EVOLVE-BLOCK-START
 class GeneratedCC extends ConcurrencyControl {
 
-    private static final int TPCC_NUM_WAREHOUSES = 8; // Reverted to 8, aligned with TPC-C workload definition for optimal partitioning.
+    private static final int TPCC_NUM_WAREHOUSES = 8;
     private static final int TPCC_NUM_ITEMS = 1000;
-    private static final long LOCK_TIMEOUT_MS = 100; // Reverted to 100ms for potentially higher throughput with short transactions.
-    private static final Integer UNASSIGNED_PARTITION = -1;
+    private static final long LOCK_TIMEOUT_MS = 5; // Reverted to 5ms, found to be optimal for faster aborts and retries on short TPC-C transactions based on previous best performance.
+    private static final int UNASSIGNED_PARTITION_ID = -1; // Changed to primitive int
     private static final int GLOBAL_PARTITION_ID = TPCC_NUM_WAREHOUSES + 1; // For keys not matching a specific TPC-C warehouse pattern
 
     private final AtomicInteger nextTxid = new AtomicInteger(1);
@@ -58,8 +58,19 @@ class GeneratedCC extends ConcurrencyControl {
         this.partitionManager = PartitionManager.getInstance();
     }
 
+    private static class TxnCCState {
+        int assignedPartitionId = UNASSIGNED_PARTITION_ID;
+        ReentrantLock partitionLock = null;
+    }
+
     public static ConcurrencyControl buildCc() {
         return new GeneratedCC();
+    }
+
+    // Helper method to retrieve the custom CC state
+    private TxnCCState getTxnCCState(Transaction txn) {
+        // This cast is safe because we always put a TxnCCState object in begin()
+        return (TxnCCState) txn.meta.get("cc_state");
     }
 
     private static class PartitionState {
@@ -99,9 +110,7 @@ class GeneratedCC extends ConcurrencyControl {
         }
 
         public ReentrantLock getLock(int partitionIdentifier) {
-            // parseWarehouseId guarantees partitionIdentifier is 1 to TPCC_NUM_WAREHOUSES or GLOBAL_PARTITION_ID.
-            // The partitions array is sized GLOBAL_PARTITION_ID, making indices 0 to GLOBAL_PARTITION_ID - 1 valid.
-            // Thus, partitions[partitionIdentifier - 1] always accesses a valid lock.
+            // Maps WID (1-N) to index (0-N-1), GLOBAL_PARTITION_ID (N+1) to index N.
             return partitions[partitionIdentifier - 1].lock;
         }
 
@@ -110,7 +119,7 @@ class GeneratedCC extends ConcurrencyControl {
         }
 
         public static int parseWarehouseId(String key) {
-            // Optimized parsing using indexOf and direct character iteration to avoid substring allocation.
+            // Reverted to character-by-character parsing to avoid String object allocation from substring.
             int firstUnderscore = key.indexOf('_');
             if (firstUnderscore == -1) {
                 return GLOBAL_PARTITION_ID;
@@ -124,18 +133,12 @@ class GeneratedCC extends ConcurrencyControl {
             for (int i = firstUnderscore + 1; i < secondUnderscore; i++) {
                 char c = key.charAt(i);
                 if (c < '0' || c > '9') {
-                    return GLOBAL_PARTITION_ID; // Non-digit character found
+                    return GLOBAL_PARTITION_ID; // Not a valid digit
                 }
                 wid = wid * 10 + (c - '0');
             }
 
-            // Ensure the parsed WID is within the expected range for TPC-C specific partitions.
-            // If wid is 0 (e.g., "w_0_ytd" or "w__ytd" where loop doesn't run), it will correctly fall to GLOBAL_PARTITION_ID.
-            if (wid > 0 && wid <= TPCC_NUM_WAREHOUSES) {
-                return wid;
-            } else {
-                return GLOBAL_PARTITION_ID; // WID parsed as 0, out of expected range, or from an empty/invalid string segment
-            }
+            return (wid > 0 && wid <= TPCC_NUM_WAREHOUSES) ? wid : GLOBAL_PARTITION_ID;
         }
     }
 
@@ -144,22 +147,22 @@ class GeneratedCC extends ConcurrencyControl {
         partitionManager.initialize(store);
         int txid = nextTxid.getAndIncrement();
         Transaction txn = new Transaction(txid, 0);
-        txn.meta.put("partition_id", UNASSIGNED_PARTITION);
+        txn.meta.put("cc_state", new TxnCCState()); // Store custom CC state object
         return txn;
     }
 
     private boolean routeAndLockTransaction(Transaction txn, String key) {
         if (txn.status != TxStatus.ACTIVE) return false;
 
+        TxnCCState ccState = getTxnCCState(txn); // One map lookup instead of two
         int wid = PartitionManager.parseWarehouseId(key);
-        Integer partitionId = (Integer) txn.meta.get("partition_id");
 
-        if (partitionId.equals(UNASSIGNED_PARTITION)) {
+        if (ccState.assignedPartitionId == UNASSIGNED_PARTITION_ID) { // Primitive int comparison
             ReentrantLock lock = partitionManager.getLock(wid);
             try {
                 if (lock.tryLock(LOCK_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                    txn.meta.put("partition_id", wid);
-                    txn.meta.put("partition_lock", lock);
+                    ccState.assignedPartitionId = wid; // Primitive int assignment
+                    ccState.partitionLock = lock;
                     return true;
                 } else {
                     txn.status = TxStatus.ABORTED;
@@ -170,7 +173,9 @@ class GeneratedCC extends ConcurrencyControl {
                 txn.status = TxStatus.ABORTED;
                 return false;
             }
-        } else if (partitionId != wid) {
+        } else if (ccState.assignedPartitionId != wid) { // Primitive int comparison
+            // Transaction trying to access data in a different partition than the one it already locked.
+            // This violates the single-partition assumption of PDE, so abort.
             txn.status = TxStatus.ABORTED;
             return false;
         }
@@ -181,12 +186,14 @@ class GeneratedCC extends ConcurrencyControl {
 
     @Override
     public Object read(Transaction txn, String key, KVStore store) {
+        // Handle item_ keys directly from cache, bypassing locking logic
         if (key.startsWith("item_")) {
             return partitionManager.getItemPrice(key);
         }
 
+        // For other keys, route and acquire partition lock
         if (!routeAndLockTransaction(txn, key)) {
-            return null;
+            return null; // Transaction aborted due to locking failure or cross-partition access
         }
 
         if (txn.writeSet.containsKey(key)) {
@@ -213,7 +220,8 @@ class GeneratedCC extends ConcurrencyControl {
 
     @Override
     public CommitResult commit(Transaction txn, KVStore store) {
-        ReentrantLock lock = (ReentrantLock) txn.meta.get("partition_lock");
+        TxnCCState ccState = getTxnCCState(txn);
+        ReentrantLock lock = ccState.partitionLock; // Direct field access
         try {
             if (txn.status != TxStatus.ACTIVE) {
                 return CommitResult.failure("Transaction was not active: " + txn.status);
@@ -230,10 +238,9 @@ class GeneratedCC extends ConcurrencyControl {
 
     @Override
     public void rollback(Transaction txn, KVStore store) {
-        ReentrantLock lock = (ReentrantLock) txn.meta.get("partition_lock");
+        TxnCCState ccState = getTxnCCState(txn);
+        ReentrantLock lock = ccState.partitionLock; // Direct field access
         try {
-            // No need to check status, rollback should be safe to call multiple times
-            // or on already committed/aborted transactions. The goal is cleanup.
             txn.writeSet.clear();
             txn.status = TxStatus.ABORTED;
         } finally {

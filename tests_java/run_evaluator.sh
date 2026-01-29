@@ -1,9 +1,10 @@
 #!/bin/bash
 
 # Run the Java CC Evaluator
-# Usage: ./run_evaluator.sh [InitialProgram.java] [output.json]
+# Usage: ./run_evaluator.sh [--correctness-only] [InitialProgram.java] [output.json]
 #
 # Arguments:
+#   --correctness-only  - Optional flag to only output correctness metric (must be first)
 #   InitialProgram.java - Path to the CC implementation file (default: InitialProgram.java)
 #   output.json         - Path to output JSON file (default: output.json)
 
@@ -12,7 +13,14 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Parse arguments
+# Parse arguments - check for --correctness-only flag first
+CORRECTNESS_ONLY=""
+
+if [ "$1" = "--correctness-only" ]; then
+    CORRECTNESS_ONLY="--correctness-only"
+    shift
+fi
+
 INPUT_FILE="${1:-InitialProgram.java}"
 OUTPUT_FILE="${2:-output.json}"
 
@@ -44,7 +52,7 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "Running evaluator..."
-java -Xmx120g tests_java.Evaluator --output "$OUTPUT_FILE"
+java -Xmx120g tests_java.Evaluator --output "$OUTPUT_FILE" $CORRECTNESS_ONLY
 
 if [ $? -eq 0 ]; then
     echo ""
