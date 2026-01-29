@@ -101,7 +101,6 @@ def get_propose_prompt_with_transactions2(transactions: list[str], inspiration_t
     prompt = f"""
     You are an expert in database concurrency control research and design.
     Your task is to design a concurrency control protocol that is optimized for a set of pre-known transaction types.
-
     IMPORTANT:
         - This concurrency control protocol is optimized for a set of pre-known transaction types. 
         - Use the provided pre-defined transactions code to optimize your protocol design. 
@@ -380,7 +379,7 @@ def get_generate_prompt_java() -> str:
     Eventually, you'll create a concrete class that extends the abstract class ConcurrencyControl, 
     implementing the required methods (begin, write, read, commit, and rollback) in a way that conforms to concurrency control principles.
     We'll proceed step by step.
-
+    
     Step 1: Understand the codebase
     The codebase is as follows:
 
