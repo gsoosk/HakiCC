@@ -92,58 +92,59 @@ def get_propose_prompt_with_transactions2(transactions: list[str], inspiration_t
     transactions_block = ""
     if transactions:
         transactions_block = f"""
-        The pre-defined transactions are as follows:
-        <transactions>
-        {transactions}
-        </transactions>
+The pre-defined transactions are as follows:
+<transactions>
+{transactions}
+</transactions>
         """
     
     prompt = f"""
-    You are an expert in database concurrency control research and design.
-    Your task is to design a concurrency control protocol that is optimized for a set of pre-known transaction types.
-    IMPORTANT:
-        - This concurrency control protocol is optimized for a set of pre-known transaction types. 
-        - Use the provided pre-defined transactions code to optimize your protocol design. 
-        - You have access to the full code of these transactions. provided in the <transactions>...</transactions> tag.
-        - FOR EXAMPLE: you can skip lock for specific keys, reorder locks, use commutative properties, or any other optimization that can make the protocol more efficient for these transactions. 
-            Try any optimization that can make the protocol more efficient for these transactions.
-    
-    GOAL:
-        - The goal is to design a concurrency control to be as efficient as possible for the pre-defined transactions.
+You are an expert in database concurrency control research and design.
+Your task is to design a concurrency control protocol that is optimized for a set of pre-known transaction types.
 
-    CONSTRAINTS:
-        - Your protocol should be a design beyond the scope of classical methods like 2PL (Two-Phase Locking), OCC (Optimistic Concurrency Control), or MVCC (Multi-Version Concurrency Control).
-            Simple implementations of 2PL, OCC, or MVCC are not allowed. Optimize them for the pre-defined transactions.
-        - Clearly define: metadata maintained, read/write visibility rule, commit rule, conflict handling, abort conditions 
-        - Explain why it can ensure serializability or a chosen isolation level
-        - Discuss expected trade-offs (throughput, abort rate, latency) and workloads it suits
-        - DO NOT repeat previous proposals.
-    
-    
-    {transactions_block}
+IMPORTANT:
+    - This concurrency control protocol is optimized for a set of pre-known transaction types. 
+    - Use the provided pre-defined transactions code to optimize your protocol design. 
+    - You have access to the full code of these transactions. provided in the <transactions>...</transactions> tag.
+    - FOR EXAMPLE: you can skip lock for specific keys, reorder locks, use commutative properties, or any other optimization that can make the protocol more efficient for these transactions. 
+        Try any optimization that can make the protocol more efficient for these transactions.
+
+GOAL:
+    - The goal is to design a concurrency control to be as efficient as possible for the pre-defined transactions.
+
+CONSTRAINTS:
+    - Your protocol should be a design beyond the scope of classical methods like 2PL (Two-Phase Locking), OCC (Optimistic Concurrency Control), or MVCC (Multi-Version Concurrency Control).
+        Simple implementations of 2PL, OCC, or MVCC are not allowed. Optimize them for the pre-defined transactions.
+    - Clearly define: metadata maintained, read/write visibility rule, commit rule, conflict handling, abort conditions 
+    - Explain why it can ensure serializability or a chosen isolation level
+    - Discuss expected trade-offs (throughput, abort rate, latency) and workloads it suits
+    - DO NOT repeat previous proposals.
 
 
-    First, propose a the design of the concurrency control protocol conceptually. Do NOT write code yet.
-    You will be prompted to write a java code in the future for your protocol based on a codebase that will be provided.
-    You will keep improving your protocol until it is correct and serializable.
-
-    {inspiration_block}
-    {inspiration_guidance}
+{transactions_block}
 
 
+First, propose a the design of the concurrency control protocol conceptually. Do NOT write code yet.
+You will be prompted to write a java code in the future for your protocol based on a codebase that will be provided.
+You will keep improving your protocol until it is correct and serializable.
 
-    Output Format:
-    - Provide a concise name and a 5-10 bullet point design spec
-    - Core Idea: Summarize the intuition behind the protocol.
-    - Performance: How does the procotol is optimized for the pre-defined transactions?
-    - Correctness: How does the protocol ensure serializability (or another well-defined correctness criterion)? Provide justification.
-    - Complete details of how It Works (Step-by-Step): Describe the protocol’s execution flow, including:
-        - Transaction begin
-        - Read/write operations
-        - Conflict detection/resolution (if any)
-        - Commit/Rollback logic
-    - Wrap any example traces or structured artifacts within <observe> ... </observe>
-    - Trade-offs or Open Questions (optional): Any areas where further analysis or experimentation is needed.
+{inspiration_block}
+{inspiration_guidance}
+
+
+
+Output Format:
+- Provide a concise name and a 5-10 bullet point design spec
+- Core Idea: Summarize the intuition behind the protocol.
+- Performance: How does the procotol is optimized for the pre-defined transactions?
+- Correctness: How does the protocol ensure serializability (or another well-defined correctness criterion)? Provide justification.
+- Complete details of how It Works (Step-by-Step): Describe the protocol’s execution flow, including:
+    - Transaction begin
+    - Read/write operations
+    - Conflict detection/resolution (if any)
+    - Commit/Rollback logic
+- Wrap any example traces or structured artifacts within <observe> ... </observe>
+- Trade-offs or Open Questions (optional): Any areas where further analysis or experimentation is needed.
     """
     return prompt
 
