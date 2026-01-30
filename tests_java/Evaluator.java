@@ -1326,6 +1326,12 @@ public class Evaluator {
         return evaluate(ccFactory, false);
     }
 
+    private static double getThroughputScore(double throughput) {
+        double MAX_TPCC_THROUGHPUT = 600_000.0;
+        // return Math.pow(Math.log(throughput + 1) / Math.log(MAX_TPCC_THROUGHPUT + 1), 10);
+        return throughput / (MAX_TPCC_THROUGHPUT);
+    }
+
     public static EvaluationResult evaluate(Supplier<ConcurrencyControl> ccFactory, boolean correctnessOnly) {
         try {
             Map<String, ScenarioResult> scenarios = new LinkedHashMap<>();
@@ -1354,27 +1360,29 @@ public class Evaluator {
                 ));
             }
 
+            if (!correctnessOnly) {
             // TPC-C with different contention levels (8 warehouses, varying hotspot intensity)
-            String[] contentionLevels = {"very_low", "low", "medium", "high", "very_high", "extreme"};
-            for (String level : contentionLevels) {
-                TpccConfig config = TpccConfig.withContention(level);
-                String scenarioName = config.configName;
-                System.out.println("Running TPC-C with contention level: " + level + "...");
-                scenarios.put(scenarioName, runScenario(
-                        ccFactory,
-                        createTpccWorkload(config),
-                        64,
-                        5.0,
-                        0.5,
-                        createTpccInitializer(config)
-                ));
+                String[] contentionLevels = {"very_low", "low", "medium", "high", "very_high", "extreme"};
+                for (String level : contentionLevels) {
+                    TpccConfig config = TpccConfig.withContention(level);
+                    String scenarioName = config.configName;
+                    System.out.println("Running TPC-C with contention level: " + level + "...");
+                    scenarios.put(scenarioName, runScenario(
+                            ccFactory,
+                            createTpccWorkload(config),
+                            64,
+                            5.0,
+                            0.5,
+                            createTpccInitializer(config)
+                    ));
+                }
             }
 
             int totalScenarios = scenarios.size();
             int correct = 0;
             double totalThroughput = 0.0;
 
-            int tpccCoefficient = 10;
+            int tpccCoefficient = 5;
             int otherCoefficient = 1;
             int weightedScenarios = 0;
 
@@ -1417,6 +1425,8 @@ public class Evaluator {
             for (Map.Entry<String, ScenarioResult> entry : scenarios.entrySet()) {
                 scenarioSummaries.put(entry.getKey(), entry.getValue().toMap());
             }
+            Map<String, Double> tpccThroughputs = throughputs.entrySet().stream().filter(entry -> entry.getKey().startsWith("tpcc_")).collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+            artifacts.put("tpcc_avg_throughputs",  tpccThroughputs.values().stream().mapToDouble(Double::doubleValue).average().orElse(0.0));
             artifacts.put("scenario_summaries", scenarioSummaries);
 
             // Only add other metrics if not in correctness-only mode
@@ -1424,33 +1434,36 @@ public class Evaluator {
                 double avgThroughput = weightedScenarios > 0 ? totalThroughput / weightedScenarios : 0.0;
 
                 // Map throughput to a bounded score
-                double throughputScore = avgThroughput / (100000.0 + avgThroughput);
-
+                double throughputScore = getThroughputScore(avgThroughput);
                 double combinedScore = 0.5 * correctness + 0.5 * throughputScore;
 
                 metrics.put("throughput_score", throughputScore);
                 metrics.put("combined_score", combinedScore);
-                metrics.put("pre_known_transactions_throughput", throughputs.get("tpcc"));
+                if (throughputs.containsKey("tpcc_contention_very_high")) 
+                    metrics.put("pre_known_transactions_under_high_contention", getThroughputScore(throughputs.get("tpcc_contention_very_high")));
+                if (throughputs.containsKey("tpcc_wh8")) 
+                    metrics.put("pre_known_transactions_normal_scenario", getThroughputScore(throughputs.get("tpcc_wh8")));
+                
 
                 // Add warehouse scalability summary
-                Map<String, Double> warehouseScalability = new LinkedHashMap<>();
-                for (int whCount : warehouseCounts) {
-                    String key = "tpcc_wh" + whCount;
-                    if (throughputs.containsKey(key)) {
-                        warehouseScalability.put(key, throughputs.get(key));
-                    }
-                }
-                metrics.put("warehouse_scalability", warehouseScalability);
+                // Map<String, Double> warehouseScalability = new LinkedHashMap<>();
+                // for (int whCount : warehouseCounts) {
+                //     String key = "tpcc_wh" + whCount;
+                //     if (throughputs.containsKey(key)) {
+                //         warehouseScalability.put(key, throughputs.get(key));
+                //     }
+                // }
+                // metrics.put("warehouse_scalability", warehouseScalability);
 
                 // Add contention impact summary
-                Map<String, Double> contentionImpact = new LinkedHashMap<>();
-                for (String level : contentionLevels) {
-                    String key = "tpcc_contention_" + level;
-                    if (throughputs.containsKey(key)) {
-                        contentionImpact.put(key, throughputs.get(key));
-                    }
-                }
-                metrics.put("contention_impact", contentionImpact);
+                // Map<String, Double> contentionImpact = new LinkedHashMap<>();
+                // for (String level : contentionLevels) {
+                //     String key = "tpcc_contention_" + level;
+                //     if (throughputs.containsKey(key)) {
+                //         contentionImpact.put(key, throughputs.get(key));
+                //     }
+                // }
+                // metrics.put("contention_impact", contentionImpact);
             }
 
             return new EvaluationResult(metrics, artifacts);

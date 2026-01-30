@@ -2,306 +2,223 @@
 package tests_java;
 
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
+import java.util.Collections;
 import java.util.Map;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 
+/**
+ * Implementation of the Semantic-Aware Latching and Optimistic Delta Application (SALVO) protocol.
+ * This protocol analyzes transaction semantics to apply optimized concurrency patterns.
+ */
 class GeneratedCC extends ConcurrencyControl {
 
-    // TPC-C constants for semantic analysis
-    private static final int TPCC_NUM_WAREHOUSES = 8;
-    private static final int TPCC_INITIAL_STOCK = 100;
-
-    private final AtomicInteger txIdCounter = new AtomicInteger(0);
-    private final AtomicInteger globalTimestamp = new AtomicInteger(0);
-    private final LogProcessor[] processors;
-
-    public GeneratedCC() {
-        processors = new LogProcessor[TPCC_NUM_WAREHOUSES + 1];
-        for (int i = 1; i <= TPCC_NUM_WAREHOUSES; i++) {
-            processors[i] = new LogProcessor(i);
-            processors[i].start();
-        }
-    }
-
-    public static ConcurrencyControl buildCc() {
-        return new GeneratedCC();
-    }
-
-    // Helper class to wrap values with a version number for OCC-style validation.
+    /**
+     * A wrapper class to associate a version number with each value stored in the KVStore.
+     * This is fundamental for the optimistic concurrency control parts of the protocol.
+     */
     private static class VersionedValue {
-        volatile Object value;
-        volatile int version;
+        final Object value;
+        final long version;
 
-        VersionedValue(Object value, int version) {
+        VersionedValue(Object value, long version) {
             this.value = value;
             this.version = version;
         }
     }
 
-    // --- Semantic Update Functionality ---
-    @FunctionalInterface
-    private interface UpdateFunction extends java.io.Serializable {
-        Object apply(Object currentValue);
-    }
+    // A sentinel object to represent null values in ConcurrentHashMaps.
+    private static final Object NULL_SENTINEL = new Object();
 
-    private static class SetValueFunction implements UpdateFunction {
-        private final Object value;
-        SetValueFunction(Object value) { this.value = value; }
-        @Override
-        public Object apply(Object currentValue) { return value; }
-    }
+    // Global state for the CC protocol
+    private final AtomicInteger tx_counter = new AtomicInteger(0);
+    private final AtomicInteger ts_counter = new AtomicInteger(0);
+    private final ConcurrentHashMap<String, ReentrantLock> lockManager = new ConcurrentHashMap<>();
 
-    private static class AddFunction implements UpdateFunction {
-        private final long delta;
-        AddFunction(long delta) { this.delta = delta; }
-        @Override
-        public Object apply(Object currentValue) {
-            if (currentValue == null) return delta;
-            return ((Number) currentValue).longValue() + delta;
-        }
-    }
+    // Standardized keys for the Transaction's 'meta' map to avoid magic strings
+    private static final String META_VERSIONS_READ = "versions_read";
+    private static final String META_DELTAS = "deltas";
+    private static final String META_IS_NEW_ORDER = "is_new_order";
+    private static final String META_PRIVATE_WRITES = "private_writes";
 
-    private static class IncrementFunction implements UpdateFunction {
-        @Override
-        public Object apply(Object currentValue) {
-            if (currentValue == null) return 1L;
-            return ((Number) currentValue).longValue() + 1;
-        }
-    }
-
-    private static class ConditionalDecrementFunction implements UpdateFunction {
-        private final int delta;
-        ConditionalDecrementFunction(int delta) { this.delta = delta; }
-        @Override
-        public Object apply(Object currentValue) {
-            int stock = (currentValue instanceof Number) ? ((Number) currentValue).intValue() : TPCC_INITIAL_STOCK;
-            int newQty = stock - delta;
-            if (newQty < 10) {
-                newQty += 91;
-            }
-            return newQty;
-        }
-    }
-
-    // --- Backend Log Processor ---
-    private static class CommitRequest {
-        final Transaction txn;
-        final CompletableFuture<CommitResult> future;
-        CommitRequest(Transaction txn, CompletableFuture<CommitResult> future) {
-            this.txn = txn;
-            this.future = future;
-        }
-    }
-
-    private class LogProcessor extends Thread {
-        private final int partitionId;
-        private final BlockingQueue<CommitRequest> queue = new LinkedBlockingQueue<>();
-        private static final int MAX_BATCH_SIZE = 100;
-
-        LogProcessor(int partitionId) {
-            this.partitionId = partitionId;
-            setName("LogProcessor-" + partitionId);
-        }
-
-        @Override
-        public void run() {
-            List<CommitRequest> batch = new ArrayList<>(MAX_BATCH_SIZE);
-            while (!Thread.currentThread().isInterrupted()) {
-                try {
-                    batch.add(queue.take());
-                    queue.drainTo(batch, MAX_BATCH_SIZE - 1);
-                    processBatch(batch);
-                    batch.clear();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
-        }
-
-        private void processBatch(List<CommitRequest> batch) {
-            if (batch.isEmpty()) return;
-
-            KVStore store = (KVStore) batch.get(0).txn.meta.get("store");
-            Map<String, VersionedValue> batchWriteBuffer = new HashMap<>();
-            List<CompletableFuture<CommitResult>> successfulFutures = new ArrayList<>();
-
-            for (CommitRequest req : batch) {
-                Transaction txn = req.txn;
-                boolean valid = true;
-
-                // 1. Validation Phase
-                for (Map.Entry<String, Object> readEntry : txn.readSet.entrySet()) {
-                    String key = readEntry.getKey();
-                    int readVersion = (Integer) readEntry.getValue();
-                    
-                    VersionedValue currentVV = getVersionedValue(key, store);
-                    
-                    int currentVersion = (currentVV != null) ? currentVV.version : -1;
-                    if (readVersion != -1 && currentVV == null) { // Read a key that was since deleted
-                        valid = false;
-                    } else if (currentVersion > readVersion) { // Read a key that was since updated
-                        valid = false;
-                    }
-                    
-                    if (!valid) {
-                        req.future.complete(CommitResult.failure("Read validation failed on key: " + key));
-                        break;
-                    }
-                }
-
-                if (!valid) continue;
-
-                // 2. Execution Phase
-                for (Map.Entry<String, Object> writeEntry : txn.writeSet.entrySet()) {
-                    String key = writeEntry.getKey();
-                    UpdateFunction func = (UpdateFunction) writeEntry.getValue();
-
-                    VersionedValue baseValue = batchWriteBuffer.get(key);
-                    if (baseValue == null) {
-                        baseValue = getVersionedValue(key, store);
-                        if (baseValue == null) {
-                             baseValue = new VersionedValue(0, -1);
-                        }
-                    }
-                    
-                    Object newValue = func.apply(baseValue.value);
-                    batchWriteBuffer.put(key, new VersionedValue(newValue, baseValue.version));
-                }
-                successfulFutures.add(req.future);
-            }
-
-            // 3. Commit Phase
-            int commitTs = globalTimestamp.incrementAndGet();
-            for (Map.Entry<String, VersionedValue> updatedEntry : batchWriteBuffer.entrySet()) {
-                String key = updatedEntry.getKey();
-                VersionedValue vv = updatedEntry.getValue();
-                vv.version++; 
-                store.update(key, vv);
-            }
-
-            for (CompletableFuture<CommitResult> future : successfulFutures) {
-                future.complete(CommitResult.success(commitTs));
-            }
-        }
+    public static ConcurrencyControl buildCc() {
+        return new GeneratedCC();
     }
 
     @Override
     public Transaction begin(KVStore store) {
-        Transaction txn = new Transaction(txIdCounter.incrementAndGet(), globalTimestamp.get());
-        txn.meta.put("store", store);
+        int txid = tx_counter.incrementAndGet();
+        int startTs = ts_counter.incrementAndGet();
+        Transaction txn = new Transaction(txid, startTs);
+        
+        txn.meta.put(META_VERSIONS_READ, new ConcurrentHashMap<String, Long>());
+        txn.meta.put(META_DELTAS, new ConcurrentHashMap<String, Long>());
+        txn.meta.put(META_PRIVATE_WRITES, new ConcurrentHashMap<String, Object>());
+        txn.meta.put(META_IS_NEW_ORDER, false);
+        
         return txn;
-    }
-
-    private VersionedValue getVersionedValue(String key, KVStore store) {
-        Object obj = store.get(key);
-        if (obj instanceof VersionedValue) {
-            return (VersionedValue) obj;
-        }
-        if (obj != null) {
-            VersionedValue vv = new VersionedValue(obj, 0);
-            store.update(key, vv);
-            return vv;
-        }
-        return null;
     }
 
     @Override
     public Object read(Transaction txn, String key, KVStore store) {
         if (txn.status != TxStatus.ACTIVE) return null;
+
+        if (txn.writeSet.containsKey(key)) return txn.writeSet.get(key);
         
-        VersionedValue vv = getVersionedValue(key, store);
-        if (vv != null) {
-            txn.readSet.put(key, vv.version);
-            return vv.value;
+        @SuppressWarnings("unchecked")
+        Map<String, Object> privateWrites = (Map<String, Object>) txn.meta.get(META_PRIVATE_WRITES);
+        if (privateWrites.containsKey(key)) return privateWrites.get(key);
+
+        if (key.startsWith("d_") && key.endsWith("_next_oid")) {
+            txn.meta.put(META_IS_NEW_ORDER, true);
+            Long newOid = store.increment(key, 1);
+            return (newOid != null) ? newOid - 1 : 1;
         }
-        txn.readSet.put(key, -1);
-        return null;
+
+        Object rawValue = store.get(key);
+        Object unwrappedValue = rawValue;
+        if (unwrappedValue instanceof VersionedValue) {
+            unwrappedValue = ((VersionedValue) unwrappedValue).value;
+        }
+        if (unwrappedValue instanceof AtomicLong) {
+            unwrappedValue = ((AtomicLong) unwrappedValue).get();
+        }
+        
+        if (key.startsWith("c_") && key.endsWith("_bal") && (Boolean) txn.meta.get(META_IS_NEW_ORDER)) {
+            return unwrappedValue;
+        }
+        
+        long version = (rawValue instanceof VersionedValue) ? ((VersionedValue) rawValue).version : 0L;
+        @SuppressWarnings("unchecked")
+        Map<String, Long> versionsRead = (Map<String, Long>) txn.meta.get(META_VERSIONS_READ);
+        versionsRead.put(key, version);
+        
+        txn.readSet.put(key, unwrappedValue == null ? NULL_SENTINEL : unwrappedValue);
+
+        return unwrappedValue;
     }
 
     @Override
     public void write(Transaction txn, String key, Object value, KVStore store) {
         if (txn.status != TxStatus.ACTIVE) return;
 
-        UpdateFunction func;
-        if (key.endsWith("_ytd") || key.endsWith("_bal")) {
-            Object currentValObj = read(txn, key, store);
-            long currentVal = (currentValObj instanceof Number) ? ((Number) currentValObj).longValue() : 0;
-            long newVal = ((Number) value).longValue();
-            func = new AddFunction(newVal - currentVal);
-        } else if (key.endsWith("_next_oid")) {
-            func = new IncrementFunction();
-        } else if (key.startsWith("s_")) {
-            Object currentStockObj = read(txn, key, store);
-            int currentStock = (currentStockObj instanceof Integer) ? (Integer) currentStockObj : TPCC_INITIAL_STOCK;
-            int newStock = (Integer) value;
-            func = new ConditionalDecrementFunction(currentStock - newStock);
-        } else {
-            func = new SetValueFunction(value);
+        if (key.startsWith("d_") && key.endsWith("_next_oid")) return;
+
+        if (key.startsWith("o_")) {
+             @SuppressWarnings("unchecked")
+             Map<String, Object> privateWrites = (Map<String, Object>) txn.meta.get(META_PRIVATE_WRITES);
+             privateWrites.put(key, value);
+             return;
         }
-        txn.writeSet.put(key, func);
-    }
-    
-    private static int getWarehouseId(String key) {
-        int start = key.indexOf('_');
-        if (start == -1 || start + 1 >= key.length()) return 1;
         
-        int end = key.indexOf('_', start + 1);
-        if (end == -1) end = key.length();
-        
-        try {
-            String idStr = key.substring(start + 1, end);
-            if (!idStr.isEmpty()) {
-                return Integer.parseInt(idStr);
+        boolean isCommutative = key.contains("_ytd") || (key.startsWith("c_") && key.endsWith("_bal"));
+        if (isCommutative && txn.readSet.containsKey(key)) {
+            Object oldValueObj = txn.readSet.get(key);
+            if (oldValueObj == NULL_SENTINEL) {
+                oldValueObj = 0L;
             }
-        } catch (NumberFormatException e) {
-            return 1;
+
+            if (oldValueObj instanceof Number && value instanceof Number) {
+                long delta = ((Number) value).longValue() - ((Number) oldValueObj).longValue();
+                @SuppressWarnings("unchecked")
+                Map<String, Long> deltas = (Map<String, Long>) txn.meta.get(META_DELTAS);
+                deltas.merge(key, delta, Long::sum);
+                txn.writeSet.put(key, value);
+                return;
+            }
         }
-        return 1;
+        
+        txn.writeSet.put(key, value);
     }
 
     @Override
     public CommitResult commit(Transaction txn, KVStore store) {
-        if (txn.status != TxStatus.ACTIVE) {
-            return CommitResult.failure("Transaction already terminated.");
-        }
+        if (txn.status != TxStatus.ACTIVE) return CommitResult.failure("Transaction not active.");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Long> deltas = (Map<String, Long>) txn.meta.get(META_DELTAS);
         
-        if (txn.writeSet.isEmpty()) {
-            txn.status = TxStatus.COMMITTED;
-            return CommitResult.success(globalTimestamp.get());
-        }
+        java.util.Set<String> keysToLock = new java.util.HashSet<>(txn.writeSet.keySet());
+        keysToLock.addAll(deltas.keySet());
+        ArrayList<String> sortedLockKeys = new ArrayList<>(keysToLock);
+        Collections.sort(sortedLockKeys);
 
-        String firstKey = txn.writeSet.keys().nextElement();
-        int partitionId = getWarehouseId(firstKey);
-        
-        if (partitionId <= 0 || partitionId > TPCC_NUM_WAREHOUSES) {
-             txn.status = TxStatus.ABORTED;
-            return CommitResult.failure("Invalid partition ID: " + partitionId + " for key " + firstKey);
-        }
-
-        CompletableFuture<CommitResult> future = new CompletableFuture<>();
-        processors[partitionId].queue.add(new CommitRequest(txn, future));
-
+        ArrayList<ReentrantLock> heldLocks = new ArrayList<>();
         try {
-            CommitResult result = future.get();
-            if (result.ok) {
-                txn.status = TxStatus.COMMITTED;
-            } else {
-                txn.status = TxStatus.ABORTED;
+            for (String key : sortedLockKeys) {
+                ReentrantLock lock = lockManager.computeIfAbsent(key, k -> new ReentrantLock(true));
+                lock.lock();
+                heldLocks.add(lock);
             }
-            return result;
-        } catch (InterruptedException | ExecutionException e) {
-            txn.status = TxStatus.ABORTED;
-            Thread.currentThread().interrupt();
-            return CommitResult.failure("Commit interrupted: " + e.getMessage());
+
+            @SuppressWarnings("unchecked")
+            Map<String, Long> versionsRead = (Map<String, Long>) txn.meta.get(META_VERSIONS_READ);
+            for (Map.Entry<String, Long> entry : versionsRead.entrySet()) {
+                String key = entry.getKey();
+                long readVersion = entry.getValue();
+                Object rawValue = store.get(key);
+                long currentVersion = (rawValue instanceof VersionedValue) ? ((VersionedValue) rawValue).version : 0L;
+
+                if (readVersion != currentVersion) {
+                    rollback(txn, store);
+                    return CommitResult.failure("Version conflict on key: " + key);
+                }
+            }
+            
+            int commitTs = ts_counter.incrementAndGet();
+            
+            for (Map.Entry<String, Object> entry : txn.writeSet.entrySet()) {
+                String key = entry.getKey();
+                if (deltas.containsKey(key)) continue;
+                Object rawValue = store.get(key);
+                long currentVersion = (rawValue instanceof VersionedValue) ? ((VersionedValue) rawValue).version : 0L;
+                store.update(key, new VersionedValue(entry.getValue(), currentVersion + 1));
+            }
+
+            for (Map.Entry<String, Long> entry : deltas.entrySet()) {
+                String key = entry.getKey();
+                Object rawValue = store.get(key);
+                VersionedValue vv = (rawValue instanceof VersionedValue) ? (VersionedValue) rawValue : new VersionedValue(null, 0L);
+                
+                Object currentVal = vv.value;
+                if (currentVal instanceof AtomicLong) {
+                    currentVal = ((AtomicLong)currentVal).get();
+                }
+
+                long baseValue = (currentVal instanceof Number) ? ((Number) currentVal).longValue() : 0L;
+                long newNumericValue = baseValue + entry.getValue();
+                store.update(key, new VersionedValue(newNumericValue, vv.version + 1));
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> privateWrites = (Map<String, Object>) txn.meta.get(META_PRIVATE_WRITES);
+            for (Map.Entry<String, Object> entry : privateWrites.entrySet()) {
+                store.insert(entry.getKey(), new VersionedValue(entry.getValue(), 0L));
+            }
+
+            txn.status = TxStatus.COMMITTED;
+            return CommitResult.success(commitTs);
+
+        } finally {
+            for (ReentrantLock lock : heldLocks) {
+                lock.unlock();
+            }
         }
     }
 
     @Override
     public void rollback(Transaction txn, KVStore store) {
+        if (txn.status == TxStatus.ABORTED) return;
         txn.status = TxStatus.ABORTED;
+        
+        txn.readSet.clear();
+        txn.writeSet.clear();
+        if (txn.meta != null) {
+            ((Map<?, ?>) txn.meta.get(META_VERSIONS_READ)).clear();
+            ((Map<?, ?>) txn.meta.get(META_DELTAS)).clear();
+            ((Map<?, ?>) txn.meta.get(META_PRIVATE_WRITES)).clear();
+        }
     }
 }
