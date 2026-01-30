@@ -331,7 +331,7 @@ class Agent:
                     cwd=str(java_dir),
                     capture_output=True,
                     text=True,
-                    timeout=180  # 3 minute timeout
+                    timeout=300  # 3 minute timeout
                 )
                 
                 stdout = result.stdout
