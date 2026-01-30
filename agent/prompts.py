@@ -118,7 +118,7 @@ CONSTRAINTS:
     - Clearly define: metadata maintained, read/write visibility rule, commit rule, conflict handling, abort conditions 
     - Explain why it can ensure serializability or a chosen isolation level
     - Discuss expected trade-offs (throughput, abort rate, latency) and workloads it suits
-    - DO NOT repeat previous proposals.
+    - IMPORTANT: DO NOT repeat previous proposals. Your idea should be different from the previous proposals.
 
 
 {transactions_block}

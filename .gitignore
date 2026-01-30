@@ -191,3 +191,5 @@ tests_java/tests_java/*
 
 tests_java/benchmark_results/*
 tests_java/output.json
+tests_java/CCImplementationTemp.java
+tests_java/GeneratedCC.java
