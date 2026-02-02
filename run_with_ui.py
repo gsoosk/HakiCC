@@ -22,9 +22,9 @@ st.set_page_config(page_title="Agent Workflow Runner", page_icon="🤖", layout=
 st.session_state['stop_clicked'] = False  # Initialize the stop button state
 
 @st.cache_resource(show_spinner=False)
-def get_workflow(inspiration_text: str | None = None, language_mode: str = "python"):
-    print(f"inspiration_text: {inspiration_text}, language_mode: {language_mode}")
-    agent = Agent(inspiration_text=inspiration_text, language_mode=language_mode)
+def get_workflow(inspiration_text: str | None = None, language_mode: str = "python", target_cc_count: int = 1):
+    print(f"inspiration_text: {inspiration_text}, language_mode: {language_mode}, target_cc_count: {target_cc_count}")
+    agent = Agent(inspiration_text=inspiration_text, language_mode=language_mode, target_cc_count=target_cc_count)
     return agent.get_workflow()
 
 def to_role(message: Any) -> str:
@@ -147,12 +147,17 @@ def get_streamlit_cb(parent_container: DeltaGenerator) -> BaseCallbackHandler:
 
     return st_cb
 
-def stream_run(inspiration_text: str | None = None, language_mode: str = "python") -> None:
+def stream_run(inspiration_text: str | None = None, language_mode: str = "python", target_cc_count: int = 1) -> None:
     # Reset stop button state at the start of the run
     st.session_state['stop_clicked'] = False
-    workflow = get_workflow(inspiration_text=inspiration_text, language_mode=language_mode)
-    init_state: State = State({"messages": [], "next_step": None})
-    config = {"recursion_limit": 500, "configurable": {"thread_id": "streamlit-session"}}
+    workflow = get_workflow(inspiration_text=inspiration_text, language_mode=language_mode, target_cc_count=target_cc_count)
+    init_state: State = State({
+        "messages": [], 
+        "next_step": None,
+        "generated_cc_count": 0,
+        "target_cc_count": target_cc_count
+    })
+    config = {"recursion_limit": 5000, "configurable": {"thread_id": "streamlit-session"}}
 
     printed_messages = 0
     chat_container = st.container()
@@ -199,8 +204,18 @@ language_mode = st.selectbox(
     help="Select the programming language for generated concurrency control code"
 )
 
+# Target CC count input
+target_cc_count = st.number_input(
+    "Target CC Count",
+    min_value=1,
+    max_value=100,
+    value=1,
+    step=1,
+    help="Number of final CC protocols to generate before stopping. The workflow will restart until this target is reached."
+)
+
 if run_clicked:
-    stream_run(inspiration_text=inspiration_text, language_mode=language_mode)
+    stream_run(inspiration_text=inspiration_text, language_mode=language_mode, target_cc_count=target_cc_count)
 
 
 

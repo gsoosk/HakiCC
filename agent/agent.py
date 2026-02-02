@@ -27,6 +27,10 @@ import json
 
 
 
+# Maximum number of code iterations before restarting the workflow
+MAX_CODE_ITERATIONS = 40
+
+
 class State(TypedDict):
     messages: Annotated[list[str], add_messages]
     next_step: str | None
@@ -36,11 +40,15 @@ class State(TypedDict):
     current_code: str
     novelty_result: str
     language_mode: str  # "python" or "java"
+    
+    # Tracking for target CC generation
+    generated_cc_count: int
+    target_cc_count: int
 
 
 class Agent:
 
-    def __init__(self, inspiration_pdf_path: str | None = None, inspiration_text: str | None = None, language_mode: str = "python") -> None:
+    def __init__(self, inspiration_pdf_path: str | None = None, inspiration_text: str | None = None, language_mode: str = "python", target_cc_count: int = 1) -> None:
         """
         Initialize the agent.
         
@@ -48,11 +56,13 @@ class Agent:
             inspiration_pdf_path: Path to a PDF file for inspiration
             inspiration_text: Text for inspiration
             language_mode: "python" or "java" - determines which language to generate code in
+            target_cc_count: Number of final CC protocols to generate before stopping
         """
         self.language_mode = language_mode.lower()
         if self.language_mode not in ("python", "java"):
             raise ValueError(f"Invalid language_mode: {language_mode}. Must be 'python' or 'java'.")
         
+        self.target_cc_count = target_cc_count
         self.workflow = self.build_workflow()
         self.llm = get_llm()
         self.checkpointer = MemorySaver()
@@ -151,8 +161,13 @@ class Agent:
             # state["messages"] = Annotated[list[str], add_messages]
             # state["messages"].clear()
 
-            # Set the language mode from agent configuration
+            # Set the language mode and target CC count from agent configuration
             state["language_mode"] = self.language_mode
+            state["target_cc_count"] = self.target_cc_count
+            
+            # Initialize generated_cc_count if not set (first run)
+            if state.get("generated_cc_count") is None:
+                state["generated_cc_count"] = 0
 
             previous_proposals = self.get_previous_proposals()
             # Prepare an LLM summary (<=5000 chars) of any provided inspiration text
@@ -176,6 +191,12 @@ class Agent:
             return state
 
         def cc_generator(state: State) -> State:
+            # Check if max code iterations reached - restart workflow if so
+            if state.get("code_iteration", 0) >= MAX_CODE_ITERATIONS:
+                print(f"[Agent] Max code iterations ({MAX_CODE_ITERATIONS}) reached. Restarting workflow...")
+                state["next_step"] = "restart"
+                return state
+            
             project_root = Path(__file__).resolve().parent.parent
             language_mode = state.get("language_mode", "python")
             
@@ -388,6 +409,30 @@ class Agent:
             state["novelty_result"] = llm_response
             state["next_step"] = "end"
             return state
+        
+        def cc_restart(state: State) -> State:
+            """Reset state for a new workflow run while preserving CC generation count."""
+            print(f"[Agent] Restarting workflow... (Generated {state.get('generated_cc_count', 0)} CCs so far)")
+            
+            # Preserve these values across restarts
+            generated_cc_count = state.get("generated_cc_count", 0)
+            target_cc_count = state.get("target_cc_count", 1)
+            language_mode = state.get("language_mode", "python")
+            
+            # Clear messages and reset iteration count
+            state["messages"] = []
+            state["code_iteration"] = 0
+            state["current_protocol_proposal"] = ""
+            state["current_code"] = ""
+            state["novelty_result"] = ""
+            
+            # Restore preserved values
+            state["generated_cc_count"] = generated_cc_count
+            state["target_cc_count"] = target_cc_count
+            state["language_mode"] = language_mode
+            state["next_step"] = "propose"
+            
+            return state
 
         def cc_final_report(state: State) -> State:
             # Save the latest generated CC to a new versioned file and ask LLM for a final report
@@ -444,7 +489,23 @@ class Agent:
                 new_path.write_text(llm_comment + novelty_comment + code_text, encoding="utf-8")
             state["messages"].append(AIMessage(content=llm_response))
             state["messages"].append(AIMessage(content=f'''Novelty Result:\n```json\n{state["novelty_result"]}\n```'''))
-            state["next_step"] = "end"
+            
+            # Increment generated CC count and check if target reached
+            state["generated_cc_count"] = state.get("generated_cc_count", 0) + 1
+            target = state.get("target_cc_count", 1)
+            current_count = state["generated_cc_count"]
+            
+            print(f"[Agent] Generated CC #{current_count} of {target} target")
+            
+            if current_count < target:
+                # More CCs to generate - restart the workflow
+                print(f"[Agent] Restarting workflow to generate more CCs ({current_count}/{target})...")
+                state["next_step"] = "restart"
+            else:
+                # Target reached - end the workflow
+                print(f"[Agent] Target reached! Generated {current_count} CCs.")
+                state["next_step"] = "end"
+            
             return state
         
         workflow_builder = StateGraph(State)
@@ -454,6 +515,7 @@ class Agent:
         workflow_builder.add_node("cc_performance_evaluator", cc_performance_evaluator)
         workflow_builder.add_node("cc_novelty_evaluator", cc_novelty_evaluator)
         workflow_builder.add_node("cc_final_report", cc_final_report)
+        workflow_builder.add_node("cc_restart", cc_restart)
 
         workflow_builder.add_edge(START, "cc_proposer")
 
@@ -461,7 +523,8 @@ class Agent:
 
         workflow_builder.add_conditional_edges("cc_generator", lambda state: state["next_step"], {
             "execute": "cc_correctness_checker",
-            "generate": "cc_generator"
+            "generate": "cc_generator",
+            "restart": "cc_restart"  # Max iterations reached - restart workflow
         })
         workflow_builder.add_conditional_edges("cc_correctness_checker",lambda state: state["next_step"], {
             "correct": "cc_performance_evaluator", 
@@ -472,7 +535,11 @@ class Agent:
             "improve": "cc_proposer",
             "end": "cc_final_report",
         })
-        workflow_builder.add_edge("cc_final_report", END)
+        workflow_builder.add_conditional_edges("cc_final_report", lambda state: state["next_step"], {
+            "end": END,
+            "restart": "cc_restart"  # More CCs to generate - restart workflow
+        })
+        workflow_builder.add_edge("cc_restart", "cc_proposer")
 
         return workflow_builder.compile()
 
