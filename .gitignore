@@ -176,9 +176,22 @@ pyrightconfig.json
 # End of https://www.toptal.com/developers/gitignore/api/python
 
 
-
+*.pdf
 
 workflow_diagram.png
 cc_protocols/generated_cc.py
-
+cc_protocols/final_generations/*
 workflow_diagram.png
+
+
+tests_java/tests_java/*
+# tests_java/final_generations/*
+
+
+
+tests_java/benchmark_results/*
+tests_java/output.json
+tests_java/CCImplementationTemp.java
+tests_java/GeneratedCC.java
+
+nohup.out

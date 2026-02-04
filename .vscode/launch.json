@@ -1,0 +1,25 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Evaluator",
+            "request": "launch",
+            "mainClass": "tests_java.Evaluator",
+            "projectName": "llm_7becd89f"
+        },
+        {
+            "name": "Streamlit Debug",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "streamlit",
+            "args": [
+                "run",
+                "${file}"
+            ],
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/venv/bin/python",
+            "justMyCode": true
+        }
+    ]
+}

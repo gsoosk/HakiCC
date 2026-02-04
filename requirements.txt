@@ -6,3 +6,8 @@ langchain_community
 langchain-google-vertexai
 langchain-google-genai
 rich
+streamlit
+langchain_openai
+pypdf
+matplotlib
+numpy
