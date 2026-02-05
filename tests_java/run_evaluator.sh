@@ -52,9 +52,24 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "Running evaluator..."
-java -Xmx120g tests_java.Evaluator --output "$OUTPUT_FILE" $CORRECTNESS_ONLY
 
-if [ $? -eq 0 ]; then
+# Run with 3-minute timeout (180 seconds) and kill process if it exceeds
+TIMEOUT_SECONDS=180
+
+# Disable set -e temporarily to capture exit code
+set +e
+timeout --kill-after=10 $TIMEOUT_SECONDS java -Xmx120g tests_java.Evaluator --output "$OUTPUT_FILE" $CORRECTNESS_ONLY
+EXIT_CODE=$?
+set -e
+
+# Check if timeout killed the process (exit code 124 for timeout, 137 for SIGKILL)
+if [ $EXIT_CODE -eq 124 ] || [ $EXIT_CODE -eq 137 ]; then
+    echo "Error: Evaluator timed out after ${TIMEOUT_SECONDS} seconds and was killed"
+    rm -f "$TEMP_CC_FILE"
+    exit 1
+fi
+
+if [ $EXIT_CODE -eq 0 ]; then
     echo ""
     echo "Results:"
     cat "$OUTPUT_FILE"
