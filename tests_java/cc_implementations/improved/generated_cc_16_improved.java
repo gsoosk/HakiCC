@@ -40,7 +40,7 @@ PESC is designed for high performance in mixed OLTP workloads.
 */
 
 
-package benchmark;
+package tests_java;
 
 // EVOLVE-BLOCK-START 
 import java.util.ArrayList;

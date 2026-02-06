@@ -30,7 +30,7 @@ The main performance trade-off of this protocol is sacrificing lock-free reads f
 *   The protocol is not deadlock-free by design but relies on a strict locking discipline for deadlock prevention, which is effective but requires careful implementation.Novelty Result:
 */
 
-package benchmark;
+package tests_java;
 
 // EVOLVE-BLOCK-START
 
