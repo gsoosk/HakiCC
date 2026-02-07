@@ -72,6 +72,71 @@ PROPOSAL_COLORS = [
     '#8bc34a',  # Light Green
 ]
 
+# Markers: first is for base/original, second is for improved version
+MARKER_BASE = 'o'      # Circle for base
+MARKER_IMPROVED = '^'  # Triangle for improved
+
+# Line styles
+LINESTYLE_BASE = '-'       # Solid for base
+LINESTYLE_IMPROVED = '--'  # Dashed for improved
+
+
+def get_proposal_style_mapping(proposals: List[str]) -> Dict[str, Tuple[str, str, str, str]]:
+    """
+    Create a mapping of proposal names to (color, marker, linestyle, display_label).
+    
+    Pairs base and improved versions with the same color but different markers/linestyles.
+    E.g., '14' and '14_improved' will have the same color but different markers.
+    
+    Returns:
+        Dict mapping proposal name to (color, marker, linestyle, display_label)
+    """
+    # Separate proposals into base and improved
+    base_proposals = []
+    improved_proposals = []
+    
+    for name in proposals:
+        if name.endswith('_improved'):
+            improved_proposals.append(name)
+        else:
+            base_proposals.append(name)
+    
+    # Find pairs: for each improved, find its base
+    # Base name is the improved name without '_improved' suffix
+    pairs = {}  # base_name -> (base_proposal, improved_proposal)
+    
+    for improved in improved_proposals:
+        base_name = improved[:-9]  # Remove '_improved'
+        if base_name in base_proposals:
+            pairs[base_name] = (base_name, improved)
+        else:
+            # No matching base found, treat as standalone
+            pairs[improved] = (None, improved)
+    
+    # Add unpaired base proposals
+    for base in base_proposals:
+        if base not in pairs:
+            pairs[base] = (base, None)
+    
+    # Assign colors to each pair/group
+    style_mapping = {}
+    color_idx = 0
+    
+    # Sort pairs by base name for consistent coloring
+    sorted_pairs = sorted(pairs.items(), key=lambda x: x[0])
+    
+    for base_name, (base_proposal, improved_proposal) in sorted_pairs:
+        color = PROPOSAL_COLORS[color_idx % len(PROPOSAL_COLORS)]
+        
+        if base_proposal:
+            style_mapping[base_proposal] = (color, MARKER_BASE, LINESTYLE_BASE, base_proposal)
+        if improved_proposal:
+            style_mapping[improved_proposal] = (color, MARKER_IMPROVED, LINESTYLE_IMPROVED, improved_proposal)
+        
+        color_idx += 1
+    
+    return style_mapping
+
 COLORS = {
     'primary': '#2ecc71',      # Green
     'secondary': '#3498db',     # Blue
@@ -497,10 +562,10 @@ def plot_compare_warehouse_scalability(all_data: Dict[str, dict], output_dir: Pa
     
     fig, ax = plt.subplots(figsize=(12, 7))
     
-    # Markers for different proposals
-    markers = ['o', 's', '^', 'D', 'v', 'p', 'h', '*', 'X', 'P', '<', '>']
+    # Get style mapping for consistent colors between base and improved versions
+    style_mapping = get_proposal_style_mapping(proposals)
     
-    for i, proposal in enumerate(proposals):
+    for proposal in proposals:
         data = all_data[proposal]
         wh_data = data["warehouse_scalability"]
         
@@ -517,12 +582,11 @@ def plot_compare_warehouse_scalability(all_data: Dict[str, dict], output_dir: Pa
         if not throughputs:
             continue
         
-        color = PROPOSAL_COLORS[i % len(PROPOSAL_COLORS)]
-        marker = markers[i % len(markers)]
+        color, marker, linestyle, label = style_mapping[proposal]
         
         # Plot line with markers
         line, = ax.plot(x_vals, throughputs, marker=marker, markersize=10, 
-                        linewidth=2.5, label=proposal, color=color)
+                        linewidth=2.5, linestyle=linestyle, label=label, color=color)
         
         # Mark non-serializable points with red X
         for j, (x, y, is_ser) in enumerate(zip(x_vals, throughputs, serializable)):
@@ -537,7 +601,7 @@ def plot_compare_warehouse_scalability(all_data: Dict[str, dict], output_dir: Pa
     ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1))
     ax.grid(True, alpha=0.3)
     
-    ax.annotate('Red X = Non-Serializable',
+    ax.annotate(f'Solid/{MARKER_BASE} = Base, Dashed/{MARKER_IMPROVED} = Improved\nRed X = Non-Serializable',
                 xy=(0.98, 0.02), xycoords='axes fraction',
                 fontsize=9, ha='right', va='bottom',
                 bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
@@ -575,12 +639,12 @@ def plot_compare_contention_impact(all_data: Dict[str, dict], output_dir: Path):
     
     fig, ax = plt.subplots(figsize=(14, 7))
     
-    # Markers for different proposals
-    markers = ['o', 's', '^', 'D', 'v', 'p', 'h', '*', 'X', 'P', '<', '>']
+    # Get style mapping for consistent colors between base and improved versions
+    style_mapping = get_proposal_style_mapping(proposals)
     
     x = np.arange(len(levels))
     
-    for i, proposal in enumerate(proposals):
+    for proposal in proposals:
         data = all_data[proposal]
         cont_data = data["contention_impact"]
         
@@ -597,12 +661,11 @@ def plot_compare_contention_impact(all_data: Dict[str, dict], output_dir: Path):
         if not throughputs:
             continue
         
-        color = PROPOSAL_COLORS[i % len(PROPOSAL_COLORS)]
-        marker = markers[i % len(markers)]
+        color, marker, linestyle, label = style_mapping[proposal]
         
         # Plot line with markers
         line, = ax.plot(x_vals, throughputs, marker=marker, markersize=10, 
-                        linewidth=2.5, label=proposal, color=color)
+                        linewidth=2.5, linestyle=linestyle, label=label, color=color)
         
         # Mark non-serializable points with red X
         for j, (xv, y, is_ser) in enumerate(zip(x_vals, throughputs, serializable)):
@@ -617,7 +680,7 @@ def plot_compare_contention_impact(all_data: Dict[str, dict], output_dir: Path):
     ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1))
     ax.grid(True, alpha=0.3)
     
-    ax.annotate('Red X = Non-Serializable',
+    ax.annotate(f'Solid/{MARKER_BASE} = Base, Dashed/{MARKER_IMPROVED} = Improved\nRed X = Non-Serializable',
                 xy=(0.98, 0.02), xycoords='axes fraction',
                 fontsize=9, ha='right', va='bottom',
                 bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
@@ -646,6 +709,9 @@ def plot_compare_basic_workloads(all_data: Dict[str, dict], output_dir: Path):
     
     workloads = sorted(all_workloads)
     
+    # Get style mapping for consistent colors between base and improved versions
+    style_mapping = get_proposal_style_mapping(proposals)
+    
     # Create a subdirectory for individual workload plots
     workload_dir = output_dir / "workload_plots"
     workload_dir.mkdir(exist_ok=True)
@@ -657,6 +723,8 @@ def plot_compare_basic_workloads(all_data: Dict[str, dict], output_dir: Path):
         throughputs = []
         serializable = []
         proposal_names = []
+        bar_colors = []
+        is_improved = []
         
         for proposal in proposals:
             data = all_data[proposal]
@@ -666,21 +734,26 @@ def plot_compare_basic_workloads(all_data: Dict[str, dict], output_dir: Path):
                 throughputs.append(basic_data[workload]["throughput"])
                 serializable.append(basic_data[workload]["is_serializable"])
                 proposal_names.append(proposal)
+                color, marker, _, _ = style_mapping[proposal]
+                bar_colors.append(color)
+                is_improved.append(marker == MARKER_IMPROVED)
         
         if not throughputs:
             plt.close()
             continue
         
         # Create bar chart
-        colors = [PROPOSAL_COLORS[i % len(PROPOSAL_COLORS)] for i in range(len(proposal_names))]
         x = np.arange(len(proposal_names))
-        bars = ax.bar(x, throughputs, color=colors, edgecolor='white', linewidth=1.5)
+        bars = ax.bar(x, throughputs, color=bar_colors, edgecolor='white', linewidth=1.5)
         
-        # Mark non-serializable with hatching
-        for bar, is_ser in zip(bars, serializable):
+        # Mark improved versions with hatching pattern, non-serializable with different hatch
+        for bar, is_ser, improved in zip(bars, serializable, is_improved):
             if not is_ser:
                 bar.set_hatch('//')
                 bar.set_edgecolor('red')
+            elif improved:
+                bar.set_hatch('...')
+                bar.set_edgecolor('black')
         
         # Add value labels on bars
         for bar, tp in zip(bars, throughputs):
@@ -697,8 +770,14 @@ def plot_compare_basic_workloads(all_data: Dict[str, dict], output_dir: Path):
         ax.set_xticks(x)
         ax.set_xticklabels(proposal_names, rotation=45, ha='right')
         
+        # Build legend annotation
+        legend_parts = []
+        if any(is_improved):
+            legend_parts.append('... = Improved')
         if not all(serializable):
-            ax.annotate('// = Non-Serializable',
+            legend_parts.append('// = Non-Serializable')
+        if legend_parts:
+            ax.annotate('\n'.join(legend_parts),
                         xy=(0.98, 0.98), xycoords='axes fraction',
                         fontsize=9, ha='right', va='top',
                         bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
@@ -726,6 +805,8 @@ def plot_compare_basic_workloads(all_data: Dict[str, dict], output_dir: Path):
             throughputs = []
             serializable = []
             proposal_names = []
+            bar_colors = []
+            is_improved = []
             
             for proposal in proposals:
                 data = all_data[proposal]
@@ -735,18 +816,22 @@ def plot_compare_basic_workloads(all_data: Dict[str, dict], output_dir: Path):
                     throughputs.append(basic_data[workload]["throughput"])
                     serializable.append(basic_data[workload]["is_serializable"])
                     proposal_names.append(proposal)
+                    color, marker, _, _ = style_mapping[proposal]
+                    bar_colors.append(color)
+                    is_improved.append(marker == MARKER_IMPROVED)
             
             if not throughputs:
                 ax.set_visible(False)
                 continue
             
-            colors = [PROPOSAL_COLORS[i % len(PROPOSAL_COLORS)] for i in range(len(proposal_names))]
             x = np.arange(len(proposal_names))
-            bars = ax.bar(x, throughputs, color=colors, edgecolor='white')
+            bars = ax.bar(x, throughputs, color=bar_colors, edgecolor='white')
             
-            for bar, is_ser in zip(bars, serializable):
+            for bar, is_ser, improved in zip(bars, serializable, is_improved):
                 if not is_ser:
                     bar.set_hatch('//')
+                elif improved:
+                    bar.set_hatch('...')
             
             ax.set_ylabel('Throughput', fontsize=10)
             ax.set_title(f'{workload.upper()}', fontsize=12, fontweight='bold')
@@ -772,6 +857,9 @@ def plot_compare_overall_scores(all_data: Dict[str, dict], output_dir: Path):
     if not proposals:
         return
     
+    # Get style mapping for consistent colors between base and improved versions
+    style_mapping = get_proposal_style_mapping(proposals)
+    
     fig, axes = plt.subplots(1, 3, figsize=(16, 6))
     
     # Metrics to compare
@@ -780,12 +868,22 @@ def plot_compare_overall_scores(all_data: Dict[str, dict], output_dir: Path):
     
     for ax, metric, title in zip(axes, metric_names, metric_titles):
         values = []
+        bar_colors = []
+        is_improved = []
         for proposal in proposals:
             metrics = all_data[proposal].get("metrics", {})
             values.append(metrics.get(metric, 0))
+            color, marker, _, _ = style_mapping[proposal]
+            bar_colors.append(color)
+            is_improved.append(marker == MARKER_IMPROVED)
         
-        colors = [PROPOSAL_COLORS[i % len(PROPOSAL_COLORS)] for i in range(len(proposals))]
-        bars = ax.bar(proposals, values, color=colors, edgecolor='white')
+        bars = ax.bar(proposals, values, color=bar_colors, edgecolor='white')
+        
+        # Mark improved versions with hatching pattern
+        for bar, improved in zip(bars, is_improved):
+            if improved:
+                bar.set_hatch('...')
+                bar.set_edgecolor('black')
         
         # Add value labels
         for bar, val in zip(bars, values):
@@ -803,7 +901,7 @@ def plot_compare_overall_scores(all_data: Dict[str, dict], output_dir: Path):
         if metric == 'correctness':
             ax.set_ylim(0, 1.1)
     
-    plt.suptitle('Overall Performance Comparison', fontsize=14, fontweight='bold', y=1.02)
+    plt.suptitle('Overall Performance Comparison (... = Improved)', fontsize=14, fontweight='bold', y=1.02)
     plt.tight_layout()
     plt.savefig(output_dir / 'compare_overall_scores.png', dpi=150, bbox_inches='tight')
     plt.savefig(output_dir / 'compare_overall_scores.pdf', bbox_inches='tight')
@@ -816,6 +914,15 @@ def plot_compare_heatmap(all_data: Dict[str, dict], output_dir: Path):
     proposals = list(all_data.keys())
     if not proposals:
         return
+    
+    # Sort proposals to group base and improved versions together
+    def sort_key(name):
+        # Remove _improved suffix for sorting, but add suffix to keep improved after base
+        if name.endswith('_improved'):
+            return (name[:-9], 1)
+        return (name, 0)
+    
+    proposals = sorted(proposals, key=sort_key)
     
     # Collect all scenarios
     all_scenarios = []
