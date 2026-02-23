@@ -1959,6 +1959,7 @@ public class Evaluator {
                 artifacts.put("auction_avg_throughput", auctionThroughputs.values().stream()
                         .mapToDouble(Double::doubleValue).average().orElse(0.0));
             }
+            artifacts.put("pre_known_txn_type", preKnownTxnType);
             artifacts.put("scenario_summaries", scenarioSummaries);
 
             // Only add other metrics if not in correctness-only mode

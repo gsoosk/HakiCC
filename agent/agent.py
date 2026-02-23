@@ -40,6 +40,7 @@ class State(TypedDict):
     current_code: str
     novelty_result: str
     language_mode: str  # "python" or "java"
+    workload: str  # "tpcc" or "auction"
     
     # Tracking for target CC generation
     generated_cc_count: int
@@ -48,7 +49,7 @@ class State(TypedDict):
 
 class Agent:
 
-    def __init__(self, inspiration_pdf_path: str | None = None, inspiration_text: str | None = None, language_mode: str = "python", target_cc_count: int = 1) -> None:
+    def __init__(self, inspiration_pdf_path: str | None = None, inspiration_text: str | None = None, language_mode: str = "python", target_cc_count: int = 1, workload: str = "tpcc") -> None:
         """
         Initialize the agent.
         
@@ -57,10 +58,15 @@ class Agent:
             inspiration_text: Text for inspiration
             language_mode: "python" or "java" - determines which language to generate code in
             target_cc_count: Number of final CC protocols to generate before stopping
+            workload: "tpcc" or "auction" - selects pre-known transaction type
         """
         self.language_mode = language_mode.lower()
         if self.language_mode not in ("python", "java"):
             raise ValueError(f"Invalid language_mode: {language_mode}. Must be 'python' or 'java'.")
+        
+        self.workload = workload.lower()
+        if self.workload not in ("tpcc", "auction"):
+            raise ValueError(f"Invalid workload: {workload}. Must be 'tpcc' or 'auction'.")
         
         self.target_cc_count = target_cc_count
         self.workflow = self.build_workflow()
@@ -161,9 +167,10 @@ class Agent:
             # state["messages"] = Annotated[list[str], add_messages]
             # state["messages"].clear()
 
-            # Set the language mode and target CC count from agent configuration
+            # Set the language mode, workload, and target CC count from agent configuration
             state["language_mode"] = self.language_mode
             state["target_cc_count"] = self.target_cc_count
+            state["workload"] = self.workload
             
             # Initialize generated_cc_count if not set (first run)
             if state.get("generated_cc_count") is None:
@@ -178,8 +185,7 @@ class Agent:
                 except Exception:
                     inspiration_summary = None
 
-            # prompt = get_propose_prompt(inspiration_text=inspiration_summary)
-            prompt = get_propose_prompt_with_transactions2([], inspiration_text=inspiration_summary)
+            prompt = get_propose_prompt_with_transactions2([], inspiration_text=inspiration_summary, workload=self.workload)
 
 
             state["messages"].append(HumanMessage(content=prompt))
@@ -344,11 +350,13 @@ class Agent:
             # Run the Java evaluator
             output_json_path = java_dir / "output.json"
             run_script = java_dir / "run_evaluator.sh"
+            workload = state.get("workload", "tpcc")
+            pre_known_txn = "auction" if workload == "auction" else "tpcc"
             
             try:
                 # Run the evaluator script
                 result = subprocess.run(
-                    ["bash", str(run_script), '--correctness-only', str(generated_path), str(output_json_path)],
+                    ["bash", str(run_script), '--correctness-only', '--pre-known-txn', pre_known_txn, str(generated_path), str(output_json_path)],
                     cwd=str(java_dir),
                     capture_output=True,
                     text=True,
@@ -418,6 +426,7 @@ class Agent:
             generated_cc_count = state.get("generated_cc_count", 0)
             target_cc_count = state.get("target_cc_count", 1)
             language_mode = state.get("language_mode", "python")
+            workload = state.get("workload", "tpcc")
             
             # Clear messages and reset iteration count
             state["messages"] = []
@@ -430,6 +439,7 @@ class Agent:
             state["generated_cc_count"] = generated_cc_count
             state["target_cc_count"] = target_cc_count
             state["language_mode"] = language_mode
+            state["workload"] = workload
             state["next_step"] = "propose"
             
             return state

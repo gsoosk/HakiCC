@@ -57,7 +57,12 @@ def get_propose_prompt(inspiration_text: str | None = None) -> str:
     return prompt
 
 
-def get_propose_prompt_with_transactions2(transactions: list[str], inspiration_text: str | None = None) -> str:
+WORKLOAD_FILE_MAP = {
+    "tpcc": "Transaction.java",
+    "auction": "AuctionMarkTransaction.java",
+}
+
+def get_propose_prompt_with_transactions2(transactions: list[str], inspiration_text: str | None = None, workload: str | None = None) -> str:
     with open('cc_core.py', 'r') as file:
         codebase = file.read()
     inspiration_block = ""
@@ -76,10 +81,13 @@ def get_propose_prompt_with_transactions2(transactions: list[str], inspiration_t
         transactions = ""
         transactions_dir = os.path.join(os.path.dirname(__file__), "transactions")
         transaction_contents = []
+        # Filter to only the relevant transaction file if workload is specified
+        target_file = WORKLOAD_FILE_MAP.get(workload) if workload else None
         if os.path.isdir(transactions_dir):
             for fname in sorted(os.listdir(transactions_dir)):
+                if target_file and fname != target_file:
+                    continue
                 file_path = os.path.join(transactions_dir, fname)
-                # Only include files (skip directories) and skip hidden files
                 if os.path.isfile(file_path) and not fname.startswith('.'):
                     try:
                         with open(file_path, "r") as tfile:

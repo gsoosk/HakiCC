@@ -22,9 +22,9 @@ st.set_page_config(page_title="Agent Workflow Runner", page_icon="🤖", layout=
 st.session_state['stop_clicked'] = False  # Initialize the stop button state
 
 @st.cache_resource(show_spinner=False)
-def get_workflow(inspiration_text: str | None = None, language_mode: str = "python", target_cc_count: int = 1):
-    print(f"inspiration_text: {inspiration_text}, language_mode: {language_mode}, target_cc_count: {target_cc_count}")
-    agent = Agent(inspiration_text=inspiration_text, language_mode=language_mode, target_cc_count=target_cc_count)
+def get_workflow(inspiration_text: str | None = None, language_mode: str = "python", target_cc_count: int = 1, workload: str = "tpcc"):
+    print(f"inspiration_text: {inspiration_text}, language_mode: {language_mode}, target_cc_count: {target_cc_count}, workload: {workload}")
+    agent = Agent(inspiration_text=inspiration_text, language_mode=language_mode, target_cc_count=target_cc_count, workload=workload)
     return agent.get_workflow()
 
 def to_role(message: Any) -> str:
@@ -147,10 +147,10 @@ def get_streamlit_cb(parent_container: DeltaGenerator) -> BaseCallbackHandler:
 
     return st_cb
 
-def stream_run(inspiration_text: str | None = None, language_mode: str = "python", target_cc_count: int = 1) -> None:
+def stream_run(inspiration_text: str | None = None, language_mode: str = "python", target_cc_count: int = 1, workload: str = "tpcc") -> None:
     # Reset stop button state at the start of the run
     st.session_state['stop_clicked'] = False
-    workflow = get_workflow(inspiration_text=inspiration_text, language_mode=language_mode, target_cc_count=target_cc_count)
+    workflow = get_workflow(inspiration_text=inspiration_text, language_mode=language_mode, target_cc_count=target_cc_count, workload=workload)
     init_state: State = State({
         "messages": [], 
         "next_step": None,
@@ -204,6 +204,14 @@ language_mode = st.selectbox(
     help="Select the programming language for generated concurrency control code"
 )
 
+# Workload selector
+workload = st.selectbox(
+    "Pre-known Transaction Workload",
+    options=["tpcc", "auction"],
+    index=0,
+    help="Select the pre-known transaction type: TPC-C or AuctionMark"
+)
+
 # Target CC count input
 target_cc_count = st.number_input(
     "Target CC Count",
@@ -215,7 +223,7 @@ target_cc_count = st.number_input(
 )
 
 if run_clicked:
-    stream_run(inspiration_text=inspiration_text, language_mode=language_mode, target_cc_count=target_cc_count)
+    stream_run(inspiration_text=inspiration_text, language_mode=language_mode, target_cc_count=target_cc_count, workload=workload)
 
 
 
