@@ -1,25 +1,34 @@
 #!/bin/bash
 
 # Run the Java CC Evaluator
-# Usage: ./run_evaluator.sh [--correctness-only] [InitialProgram.java] [output.json]
+# Usage: ./run_evaluator.sh [--correctness-only] [--pre-known-txn tpcc|auction] [InitialProgram.java] [output.json]
 #
 # Arguments:
-#   --correctness-only  - Optional flag to only output correctness metric (must be first)
-#   InitialProgram.java - Path to the CC implementation file (default: InitialProgram.java)
-#   output.json         - Path to output JSON file (default: output.json)
+#   --correctness-only          - Optional flag to only output correctness metric
+#   --pre-known-txn tpcc|auction - Select pre-known transaction type (default: tpcc)
+#   InitialProgram.java         - Path to the CC implementation file (default: InitialProgram.java)
+#   output.json                 - Path to output JSON file (default: output.json)
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Parse arguments - check for --correctness-only flag first
+# Parse optional flags
 CORRECTNESS_ONLY=""
+PRE_KNOWN_TXN=""
 
-if [ "$1" = "--correctness-only" ]; then
-    CORRECTNESS_ONLY="--correctness-only"
-    shift
-fi
+while [[ "$1" == --* ]]; do
+    if [ "$1" = "--correctness-only" ]; then
+        CORRECTNESS_ONLY="--correctness-only"
+        shift
+    elif [ "$1" = "--pre-known-txn" ] && [ -n "$2" ]; then
+        PRE_KNOWN_TXN="--pre-known-txn $2"
+        shift 2
+    else
+        break
+    fi
+done
 
 INPUT_FILE="${1:-InitialProgram.java}"
 OUTPUT_FILE="${2:-output.json}"
@@ -53,12 +62,12 @@ fi
 
 echo "Running evaluator..."
 
-# Run with 3-minute timeout (180 seconds) and kill process if it exceeds
-TIMEOUT_SECONDS=180
+# Run with 5-minute timeout (300 seconds) and kill process if it exceeds
+TIMEOUT_SECONDS=300
 
 # Disable set -e temporarily to capture exit code
 set +e
-timeout --kill-after=10 $TIMEOUT_SECONDS java -Xmx120g tests_java.Evaluator --output "$OUTPUT_FILE" $CORRECTNESS_ONLY
+timeout --kill-after=10 $TIMEOUT_SECONDS java -Xmx120g tests_java.Evaluator --output "$OUTPUT_FILE" $CORRECTNESS_ONLY $PRE_KNOWN_TXN
 EXIT_CODE=$?
 set -e
 
