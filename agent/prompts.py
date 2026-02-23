@@ -150,6 +150,61 @@ Output Format:
 
 
 
+def get_propose_prompt_baseline_design(baseline_name: str, inspiration_text: str | None = None) -> str:
+    with open('cc_core.py', 'r') as file:
+        codebase = file.read()
+    inspiration_block = ""
+    inspiration_guidance = ""
+    if inspiration_text:
+        inspiration_block = f"""
+        Inspiration material (do not copy verbatim; use for ideas only):
+        <inspiration>
+        {inspiration_text}
+        </inspiration>
+        """
+        inspiration_guidance = "- Use the inspiration text to guide your proposal"
+
+    
+    prompt = f"""
+You are an expert in database concurrency control research and design.
+Your task is to give the design of a well-known concurrency control protocol.
+The protocol you are giving the design for is: {baseline_name}.
+
+GOAL:
+    - The goal is to design a concurrency control to be as efficient as possibleo.
+
+CONSTRAINTS:
+    - Clearly define: metadata maintained, read/write visibility rule, commit rule, conflict handling, abort conditions 
+    - Explain why it can ensure serializability or a chosen isolation level
+    - Discuss expected trade-offs (throughput, abort rate, latency) and workloads it suits
+    - IMPORTANT: DO NOT repeat previous proposals. Your idea should be different from the previous proposals.
+
+
+
+First, propose a the design of the concurrency control protocol conceptually. Do NOT write code yet.
+You will be prompted to write a java code in the future for your protocol based on a codebase that will be provided.
+You will keep improving your protocol until it is correct and serializable.
+
+{inspiration_block}
+{inspiration_guidance}
+
+
+
+Output Format:
+- Provide a concise name and a 5-10 bullet point design spec
+- Core Idea: Summarize the intuition behind the protocol.
+- Correctness: How does the protocol ensure serializability (or another well-defined correctness criterion)? Provide justification.
+- Complete details of how It Works (Step-by-Step): Describe the protocol’s execution flow, including:
+    - Transaction begin
+    - Read/write operations
+    - Conflict detection/resolution (if any)
+    - Commit/Rollback logic
+- Wrap any example traces or structured artifacts within <observe> ... </observe>
+- Trade-offs or Open Questions (optional): Any areas where further analysis or experimentation is needed.
+    """
+    return prompt
+
+
 def get_propose_prompt_with_transactions(transactions: list[str], inspiration_text: str | None = None) -> str:
     with open('cc_core.py', 'r') as file:
         codebase = file.read()

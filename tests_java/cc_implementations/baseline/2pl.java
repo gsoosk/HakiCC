@@ -1,269 +1,262 @@
 package tests_java;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Baseline Strict Two-Phase Locking (2PL) implementation.
+ * Wound-Wait Two-Phase Locking (2PL) concurrency control.
  *
- * - Uses per-key shared (S) and exclusive (X) locks.
- * - Locks are held until commit/rollback (strict 2PL).
- * - Deadlocks are prevented with a simple wait-die policy based on Transaction.startTs.
- * - Reads use read-your-own-writes and cache values in the transaction's readSet.
+ * Uses a per-transaction AtomicInteger state machine to prevent TOCTOU races
+ * between commit and wound operations:
+ *   STATE_ACTIVE(0) -> STATE_COMMITTING(1) -> STATE_COMMITTED(2)
+ *   STATE_ACTIVE(0) -> STATE_ABORTED(3)
  */
-class Baseline2PL extends ConcurrencyControl {
+class GeneratedCC extends ConcurrencyControl {
 
-    private enum LockMode { NONE, SHARED, EXCLUSIVE }
+    private static final Object NULL_VALUE = new Object();
+    private enum LockMode { SHARED, EXCLUSIVE }
 
-    private static final Object NULL_SENTINEL = new Object();
+    private static final int STATE_ACTIVE = 0;
+    private static final int STATE_COMMITTING = 1;
+    private static final int STATE_COMMITTED = 2;
+    private static final int STATE_ABORTED = 3;
 
-    /** Global logical clock for assigning transaction IDs / start timestamps. */
-    private final AtomicInteger timestampSeq = new AtomicInteger(0);
-    /** Global commit timestamp generator (monotonic, best-effort). */
-    private final AtomicInteger commitSeq = new AtomicInteger(0);
+    private final AtomicInteger txidCounter = new AtomicInteger(0);
+    private final AtomicInteger tsCounter = new AtomicInteger(0);
+    private final ConcurrentHashMap<String, LockEntry> lockTable = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, Transaction> activeTxns = new ConcurrentHashMap<>();
 
-    /**
-     * Per-key lock structure. Guarded by this object's monitor.
-     */
-    private static class KeyLock {
-        LockMode mode = LockMode.NONE;
-        final List<Transaction> holders = new ArrayList<>();
-    }
 
-    /**
-     * Simple lock manager: one KeyLock per logical key.
-     */
-    private static class LockManager {
-        private final ConcurrentHashMap<String, KeyLock> locks = new ConcurrentHashMap<>();
+    private static class LockEntry {
+        final Set<Integer> holders = new HashSet<>();
+        LockMode holdersMode = null;
+        final PriorityQueue<Integer> pendingQueue = new PriorityQueue<>();
+        final Map<Integer, LockMode> pendingModes = new HashMap<>();
 
-        KeyLock getKeyLock(String key) {
-            return locks.computeIfAbsent(key, k -> new KeyLock());
-        }
-    }
-
-    /**
-     * Used internally to abort a transaction when the wait-die policy chooses "die".
-     */
-    private static class LockAbortException extends Exception {
-        LockAbortException(String msg) { super(msg); }
-    }
-
-    private final LockManager lockManager = new LockManager();
-
-    private static final String HELD_LOCKS_KEY = "held_locks";
-
-    @SuppressWarnings("unchecked")
-    private Map<String, LockMode> getHeldLocks(Transaction txn) {
-        return (Map<String, LockMode>) txn.meta.get(HELD_LOCKS_KEY);
-    }
-
-    @Override
-    public Transaction begin(KVStore store) {
-        int ts = timestampSeq.getAndIncrement();
-        Transaction txn = new Transaction(ts, ts);
-        txn.meta.put(HELD_LOCKS_KEY, new HashMap<String, LockMode>());
-        return txn;
-    }
-
-    /**
-     * Wait-die deadlock prevention:
-     * - If an older transaction requests a conflicting lock, it waits.
-     * - If a younger transaction requests and finds an older conflicting holder, it aborts ("dies").
-     */
-    private void acquireLock(Transaction txn, String key, LockMode requested) throws LockAbortException {
-        if (txn.status != TxStatus.ACTIVE) {
-            throw new LockAbortException("Transaction not active");
+        boolean isHeldBefore(int txid, LockMode mode) {
+            if (!holders.contains(txid)) return false;
+            if (holdersMode == LockMode.SHARED && mode == LockMode.SHARED) return true;
+            return holdersMode == LockMode.EXCLUSIVE;
         }
 
-        KeyLock keyLock = lockManager.getKeyLock(key);
-        Map<String, LockMode> heldLocks = getHeldLocks(txn);
+        boolean canGrant(int txid, LockMode mode) {
+            if (isHeldBefore(txid, mode)) return true;
 
-        synchronized (keyLock) {
-            while (true) {
-                if (txn.status != TxStatus.ACTIVE) {
-                    throw new LockAbortException("Transaction aborted while waiting for lock");
+            if (mode == LockMode.EXCLUSIVE) {
+                if (holders.isEmpty() || (holders.size() == 1 && holders.contains(txid)))
+                    if (pendingQueue.contains(txid) && pendingQueue.peek() == txid)
+                        return true;
+                return false;
+            } else {
+                if (holdersMode == LockMode.EXCLUSIVE && !holders.isEmpty() && holders.contains(txid))
+                    return true;
+                if (holdersMode == LockMode.EXCLUSIVE)
+                    return false;
+                for (Map.Entry<Integer, LockMode> e : pendingModes.entrySet()) {
+                    if (e.getKey() < txid && e.getValue() == LockMode.EXCLUSIVE)
+                        return false;
                 }
+                return true;
+            }
+        }
 
-                // Handle lock upgrade if we already hold a lock on this key.
-                LockMode currentHeld = heldLocks.getOrDefault(key, LockMode.NONE);
-                if (currentHeld == requested || currentHeld == LockMode.EXCLUSIVE) {
-                    // Already have sufficient lock.
-                    return;
-                }
+        void addPending(int txid, LockMode mode) {
+            if (!pendingQueue.contains(txid)) {
+                pendingQueue.offer(txid);
+                pendingModes.put(txid, mode);
+            } else if (pendingModes.get(txid) == LockMode.SHARED && mode == LockMode.EXCLUSIVE) {
+                pendingModes.put(txid, mode);
+            }
+        }
 
-                boolean hasConflict = false;
-                boolean youngerThanSomeHolder = false;
+        void grant(int txid, LockMode mode) {
+            pendingQueue.remove(txid);
+            pendingModes.remove(txid);
+            holders.add(txid);
+            holdersMode = mode;
+        }
 
-                // Check for conflicts with existing holders.
-                if (!keyLock.holders.isEmpty()) {
-                    for (Transaction holder : keyLock.holders) {
-                        if (holder.txid == txn.txid) {
-                            continue; // Skip self; handled in upgrade logic above.
-                        }
-                        LockMode holderMode = getHeldLocks(holder).getOrDefault(key, LockMode.NONE);
-                        if (!areCompatible(holderMode, requested)) {
-                            hasConflict = true;
-                            if (txn.startTs > holder.startTs) {
-                                youngerThanSomeHolder = true;
-                                break;
-                            }
-                        }
-                    }
-                }
+        void release(int txid) {
+            holders.remove(txid);
+            if (holders.isEmpty()) holdersMode = null;
+            pendingQueue.remove(txid);
+            pendingModes.remove(txid);
+        }
 
-                if (!hasConflict) {
-                    // Grant / upgrade lock.
-                    if (currentHeld == LockMode.NONE) {
-                        keyLock.holders.add(txn);
-                    }
-                    keyLock.mode = combineModes(keyLock.mode, requested);
-                    heldLocks.put(key, requested);
-                    return;
-                }
+        boolean hasConflict(int holderId, int requesterId, LockMode requestedMode) {
+            if (holderId == requesterId) return false;
+            return requestedMode == LockMode.EXCLUSIVE || holdersMode == LockMode.EXCLUSIVE;
+        }
 
-                // Conflict exists: apply wait-die.
-                if (youngerThanSomeHolder) {
-                    // Younger txn must abort ("die").
-                    txn.status = TxStatus.ABORTED;
-                    throw new LockAbortException("Aborted by wait-die policy");
-                }
-
-                // Otherwise, this transaction is older than all conflicting holders: wait.
-                try {
-                    keyLock.wait();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    txn.status = TxStatus.ABORTED;
-                    throw new LockAbortException("Interrupted while waiting for lock");
-                }
+        void promoteWaiters() {
+            while (!pendingQueue.isEmpty()) {
+                int txid = pendingQueue.peek();
+                LockMode mode = pendingModes.get(txid);
+                if (mode == null) { pendingQueue.poll(); continue; }
+                if (canGrant(txid, mode)) grant(txid, mode);
+                else break;
             }
         }
     }
 
-    private boolean areCompatible(LockMode held, LockMode requested) {
-        if (held == LockMode.NONE || requested == LockMode.NONE) return true;
-        if (held == LockMode.SHARED && requested == LockMode.SHARED) return true;
-        return false; // Any other combination conflicts.
+
+    public static ConcurrencyControl buildCc() {
+        return new GeneratedCC();
     }
 
-    /**
-     * Combine aggregate and requested lock modes for the KeyLock.
-     */
-    private LockMode combineModes(LockMode existing, LockMode requested) {
-        if (existing == LockMode.NONE) return requested;
-        if (existing == LockMode.SHARED && requested == LockMode.SHARED) return LockMode.SHARED;
-        // Any involvement of EXCLUSIVE results in EXCLUSIVE.
-        return LockMode.EXCLUSIVE;
+    @Override
+    public Transaction begin(KVStore store) {
+        int txid = txidCounter.incrementAndGet();
+        int ts = tsCounter.incrementAndGet();
+        Transaction txn = new Transaction(txid, ts);
+        txn.meta.put("heldKeys", ConcurrentHashMap.newKeySet());
+        txn.meta.put("thread", Thread.currentThread());
+        txn.meta.put("state", new AtomicInteger(STATE_ACTIVE));
+        activeTxns.put(txid, txn);
+        return txn;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Set<String> getHeldKeys(Transaction txn) {
+        return (Set<String>) txn.meta.get("heldKeys");
     }
 
     @Override
     public Object read(Transaction txn, String key, KVStore store) {
         if (txn.status != TxStatus.ACTIVE) return null;
-
-        // Read-your-own-writes.
-        if (txn.writeSet.containsKey(key)) {
-            return txn.writeSet.get(key);
-        }
-
-        // Repeatable reads from cache.
-        if (txn.readSet.containsKey(key)) {
-            Object cached = txn.readSet.get(key);
-            return cached == NULL_SENTINEL ? null : cached;
-        }
-
-        try {
-            acquireLock(txn, key, LockMode.SHARED);
-        } catch (LockAbortException e) {
-            txn.status = TxStatus.ABORTED;
-            return null;
-        }
-
-        if (txn.status != TxStatus.ACTIVE) return null;
-
+        if (txn.writeSet.containsKey(key)) return txn.writeSet.get(key);
+        if (!acquireLock(txn, key, LockMode.SHARED)) return null;
         Object value = store.get(key);
-        if (value instanceof AtomicLong) {
-            value = ((AtomicLong) value).get();
-        }
-
-        txn.readSet.put(key, value == null ? NULL_SENTINEL : value);
+        txn.readSet.put(key, value == null ? NULL_VALUE : value);
         return value;
     }
 
     @Override
     public void write(Transaction txn, String key, Object value, KVStore store) {
         if (txn.status != TxStatus.ACTIVE) return;
-
-        try {
-            acquireLock(txn, key, LockMode.EXCLUSIVE);
-        } catch (LockAbortException e) {
-            txn.status = TxStatus.ABORTED;
-            return;
-        }
-
-        if (txn.status != TxStatus.ACTIVE) return;
-
+        if (!acquireLock(txn, key, LockMode.EXCLUSIVE)) return;
         txn.writeSet.put(key, value);
     }
 
     @Override
     public CommitResult commit(Transaction txn, KVStore store) {
-        if (txn.status != TxStatus.ACTIVE) {
-            // Ensure locks are released even on aborted/finished txns.
+        AtomicInteger state = (AtomicInteger) txn.meta.get("state");
+
+        if (!state.compareAndSet(STATE_ACTIVE, STATE_COMMITTING)) {
+            txn.status = TxStatus.ABORTED;
             releaseAllLocks(txn);
-            return CommitResult.failure("Transaction already " + txn.status);
+            activeTxns.remove(txn.txid);
+            return CommitResult.failure("Aborted by wound-wait");
         }
 
-        // Apply all buffered writes atomically with respect to the lock protocol.
-        store.updateAll(txn.writeSet);
-        txn.status = TxStatus.COMMITTED;
-        releaseAllLocks(txn);
-
-        int commitTs = commitSeq.incrementAndGet();
-        return CommitResult.success(commitTs);
+        try {
+            store.updateAll(txn.writeSet);
+            txn.status = TxStatus.COMMITTED;
+            state.set(STATE_COMMITTED);
+            return CommitResult.success(tsCounter.incrementAndGet());
+        } finally {
+            releaseAllLocks(txn);
+            activeTxns.remove(txn.txid);
+        }
     }
 
     @Override
     public void rollback(Transaction txn, KVStore store) {
-        if (txn.status != TxStatus.ACTIVE) {
-            // Already finished; nothing to do but ensure locks are free.
-            releaseAllLocks(txn);
-            return;
-        }
+        AtomicInteger state = (AtomicInteger) txn.meta.get("state");
+        state.set(STATE_ABORTED);
         txn.status = TxStatus.ABORTED;
-        txn.readSet.clear();
-        txn.writeSet.clear();
         releaseAllLocks(txn);
+        activeTxns.remove(txn.txid);
+    }
+
+
+    private boolean acquireLock(Transaction txn, String key, LockMode mode) {
+        LockEntry lock = lockTable.computeIfAbsent(key, k -> new LockEntry());
+
+        synchronized (lock) {
+            if (txn.status != TxStatus.ACTIVE) return false;
+
+            if (lock.isHeldBefore(txn.txid, mode)) {
+                getHeldKeys(txn).add(key);
+                return true;
+            }
+
+            handleConflict(txn, mode, lock);
+            if (txn.status != TxStatus.ACTIVE) return false;
+
+            lock.addPending(txn.txid, mode);
+            getHeldKeys(txn).add(key);
+
+            lock.promoteWaiters();
+            lock.notifyAll();
+
+            while (!lock.isHeldBefore(txn.txid, mode)) {
+                try {
+                    lock.wait(50);
+                } catch (InterruptedException e) {
+                    // Woken by wound-wait interrupt; flag cleared by exception
+                }
+                if (txn.status != TxStatus.ACTIVE) {
+                    lock.release(txn.txid);
+                    getHeldKeys(txn).remove(key);
+                    lock.promoteWaiters();
+                    lock.notifyAll();
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+
+    /**
+     * Wound-wait conflict handling.
+     *
+     * For each conflicting holder younger than the requester:
+     *  - If ACTIVE: CAS to ABORTED, release its lock, interrupt its thread.
+     *  - If already ABORTED: release its lock on this resource immediately
+     *    (the aborted txn may not have cleaned up yet).
+     *  - If COMMITTING/COMMITTED: let it finish naturally.
+     */
+    private void handleConflict(Transaction tx, LockMode requestedMode, LockEntry lock) {
+        Set<Integer> holders = new HashSet<>(lock.holders);
+        for (int holderId : holders) {
+            if (!lock.hasConflict(holderId, tx.txid, requestedMode)) continue;
+            Transaction holder = activeTxns.get(holderId);
+            if (holder == null) continue;
+
+            if (tx.startTs < holder.startTs) {
+                AtomicInteger holderState = (AtomicInteger) holder.meta.get("state");
+                int s = holderState.get();
+
+                if (s == STATE_ACTIVE) {
+                    if (holderState.compareAndSet(STATE_ACTIVE, STATE_ABORTED)) {
+                        holder.status = TxStatus.ABORTED;
+                        lock.release(holderId);
+                        Thread t = (Thread) holder.meta.get("thread");
+                        if (t != null) t.interrupt();
+                    }
+                } else if (s == STATE_ABORTED) {
+                    lock.release(holderId);
+                }
+            }
+        }
     }
 
     private void releaseAllLocks(Transaction txn) {
-        Map<String, LockMode> heldLocks = getHeldLocks(txn);
-        if (heldLocks == null || heldLocks.isEmpty()) return;
+        Set<String> heldKeys = getHeldKeys(txn);
+        if (heldKeys == null) return;
 
-        for (String key : heldLocks.keySet()) {
-            KeyLock keyLock = lockManager.getKeyLock(key);
-            synchronized (keyLock) {
-                keyLock.holders.removeIf(t -> t.txid == txn.txid);
-                if (keyLock.holders.isEmpty()) {
-                    keyLock.mode = LockMode.NONE;
-                } else {
-                    // Recompute aggregate mode based on remaining holders.
-                    LockMode aggregate = LockMode.NONE;
-                    for (Transaction holder : keyLock.holders) {
-                        LockMode hMode = getHeldLocks(holder).getOrDefault(key, LockMode.NONE);
-                        aggregate = combineModes(aggregate, hMode);
-                    }
-                    keyLock.mode = aggregate;
-                }
-                keyLock.notifyAll();
+        for (String key : new ArrayList<>(heldKeys)) {
+            LockEntry lock = lockTable.get(key);
+            if (lock == null) continue;
+            synchronized (lock) {
+                lock.release(txn.txid);
+                lock.promoteWaiters();
+                lock.notifyAll();
             }
         }
-
-        heldLocks.clear();
+        heldKeys.clear();
     }
 }
-
