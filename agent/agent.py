@@ -99,6 +99,8 @@ class Agent:
             "Your previous code is invalid.",
             "Your previous Java code is incorrect.",
             "Your previous Java code is invalid.",
+            "Your previous code is INCORRECT.",
+            "#FIX"
         )
 
         fix_start_index = None
@@ -116,7 +118,7 @@ class Agent:
         fix_segment = messages[fix_start_index:]
         if len(fix_segment) <= max_fix_messages:
             return messages
-
+        
         return head_messages + fix_segment[-max_fix_messages:]
 
     def get_previous_proposals(self) -> str:

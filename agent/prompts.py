@@ -522,6 +522,7 @@ def get_generate_prompt_java() -> str:
 def get_incorrect_code_prompt_java(feedback: str) -> str:
     """Prompt for fixing incorrect Java code."""
     prompt = f"""
+    #FIX
     Your previous code is INCORRECT. It does not meet all the requirements 
     * serializability
     * progress

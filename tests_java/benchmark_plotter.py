@@ -195,6 +195,7 @@ def extract_scenario_data(results: dict) -> dict:
         "basic": {},
         "warehouse_scalability": {},
         "contention_impact": {},
+        "auction_contention": {},
         "metrics": results.get("metrics", {}),
     }
     
@@ -215,13 +216,14 @@ def extract_scenario_data(results: dict) -> dict:
         }
         
         if name.startswith("tpcc_wh"):
-            # Extract warehouse count
             wh_count = int(name.replace("tpcc_wh", ""))
             data["warehouse_scalability"][wh_count] = scenario_data
         elif name.startswith("tpcc_contention_"):
-            # Extract contention level
             level = name.replace("tpcc_contention_", "")
             data["contention_impact"][level] = scenario_data
+        elif name.startswith("auction_contention_"):
+            level = name.replace("auction_contention_", "")
+            data["auction_contention"][level] = scenario_data
         else:
             data["basic"][name] = scenario_data
     
@@ -435,16 +437,86 @@ def plot_contention_impact(data: dict, output_dir: Path):
     print(f"Saved: contention_impact.png/pdf")
 
 
+def plot_auction_contention(data: dict, output_dir: Path):
+    """Plot throughput vs contention level for AuctionMark workload (single proposal)."""
+    auction_data = data["auction_contention"]
+    
+    if not auction_data:
+        print("No auction mark contention data found, skipping plot")
+        return
+    
+    level_order = ["low", "medium", "high", "extreme"]
+    display_names = {
+        "low": "Low", "medium": "Medium",
+        "high": "High", "extreme": "Extreme",
+        "default": "Default",
+    }
+    levels = [l for l in level_order if l in auction_data]
+    # Include any levels not in the predefined order
+    for l in sorted(auction_data.keys()):
+        if l not in levels:
+            levels.append(l)
+    
+    throughputs = [auction_data[l]["throughput"] for l in levels]
+    serializable = [auction_data[l]["is_serializable"] for l in levels]
+    level_labels = [display_names.get(l, l.replace("_", " ").title()) for l in levels]
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    auction_colors = ['#27ae60', '#f39c12', '#e74c3c', '#8e44ad', '#2c3e50', '#1abc9c']
+    colors = [auction_colors[i % len(auction_colors)] for i in range(len(levels))]
+    
+    bars = ax.bar(level_labels, throughputs, color=colors, edgecolor='white', linewidth=1.5)
+    
+    for bar, is_ser in zip(bars, serializable):
+        if not is_ser:
+            bar.set_hatch('//')
+            bar.set_edgecolor('black')
+    
+    for bar, tp in zip(bars, throughputs):
+        height = bar.get_height()
+        ax.annotate(f'{tp:,.0f}',
+                    xy=(bar.get_x() + bar.get_width() / 2, height),
+                    xytext=(0, 3),
+                    textcoords="offset points",
+                    ha='center', va='bottom', fontsize=10, fontweight='bold')
+    
+    ax.set_xlabel('Contention Level', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Throughput (txn/sec)', fontsize=12, fontweight='bold')
+    ax.set_title('AuctionMark Contention Impact', fontsize=14, fontweight='bold')
+    
+    if not all(serializable):
+        ax.annotate('// = Non-Serializable',
+                    xy=(0.98, 0.98), xycoords='axes fraction',
+                    fontsize=10, ha='right', va='top',
+                    bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+    
+    if len(throughputs) >= 2 and throughputs[0] > 0:
+        degradation = (1 - throughputs[-1] / throughputs[0]) * 100
+        ax.annotate(f'Throughput degradation: {degradation:.1f}%\n({levels[0]} → {levels[-1]})',
+                    xy=(0.02, 0.98), xycoords='axes fraction',
+                    fontsize=10, ha='left', va='top',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'auction_contention.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_dir / 'auction_contention.pdf', bbox_inches='tight')
+    plt.close()
+    print(f"Saved: auction_contention.png/pdf")
+
+
 def plot_all_scenarios(data: dict, output_dir: Path):
     """Plot comparison of all scenarios for a single proposal."""
     all_scenarios = {}
     
-    for category in ["basic", "warehouse_scalability", "contention_impact"]:
+    for category in ["basic", "warehouse_scalability", "contention_impact", "auction_contention"]:
         for name, info in data[category].items():
             if category == "warehouse_scalability":
                 display_name = f"wh{name}"
             elif category == "contention_impact":
                 display_name = f"cont_{name}"
+            elif category == "auction_contention":
+                display_name = f"auc_{name}"
             else:
                 display_name = name
             all_scenarios[display_name] = info
@@ -460,12 +532,15 @@ def plot_all_scenarios(data: dict, output_dir: Path):
     
     fig, ax = plt.subplots(figsize=(14, 8))
     
+    auction_color = '#f39c12'
     colors = []
     for name in names:
         if name.startswith("wh"):
             colors.append(COLORS['secondary'])
         elif name.startswith("cont_"):
             colors.append(COLORS['accent'])
+        elif name.startswith("auc_"):
+            colors.append(auction_color)
         else:
             colors.append(COLORS['primary'])
     
@@ -491,8 +566,9 @@ def plot_all_scenarios(data: dict, output_dir: Path):
     
     basic_patch = mpatches.Patch(color=COLORS['primary'], label='Basic Workloads')
     wh_patch = mpatches.Patch(color=COLORS['secondary'], label='Warehouse Scalability')
-    cont_patch = mpatches.Patch(color=COLORS['accent'], label='Contention Levels')
-    ax.legend(handles=[basic_patch, wh_patch, cont_patch], loc='lower right')
+    cont_patch = mpatches.Patch(color=COLORS['accent'], label='TPC-C Contention')
+    auc_patch = mpatches.Patch(color=auction_color, label='AuctionMark Contention')
+    ax.legend(handles=[basic_patch, wh_patch, cont_patch, auc_patch], loc='lower right')
     
     plt.tight_layout()
     plt.savefig(output_dir / 'all_scenarios.png', dpi=150, bbox_inches='tight')
@@ -690,6 +766,86 @@ def plot_compare_contention_impact(all_data: Dict[str, dict], output_dir: Path):
     plt.savefig(output_dir / 'compare_contention_impact.pdf', bbox_inches='tight')
     plt.close()
     print(f"Saved: compare_contention_impact.png/pdf")
+
+
+def plot_compare_auction_contention(all_data: Dict[str, dict], output_dir: Path):
+    """Compare AuctionMark contention impact across multiple proposals using line plot."""
+    proposals = list(all_data.keys())
+    if not proposals:
+        return
+    
+    level_order = ["low", "medium", "high", "extreme"]
+    display_names = {
+        "low": "Low", "medium": "Medium",
+        "high": "High", "extreme": "Extreme",
+        "default": "Default",
+    }
+    
+    all_levels = set()
+    for data in all_data.values():
+        all_levels.update(data["auction_contention"].keys())
+    
+    if not all_levels:
+        print("No auction mark contention data found across proposals, skipping comparison")
+        return
+    
+    levels = [l for l in level_order if l in all_levels]
+    for l in sorted(all_levels):
+        if l not in levels:
+            levels.append(l)
+    
+    level_labels = [display_names.get(l, l.replace("_", " ").title()) for l in levels]
+    
+    fig, ax = plt.subplots(figsize=(14, 7))
+    
+    style_mapping = get_proposal_style_mapping(proposals)
+    
+    x = np.arange(len(levels))
+    
+    for proposal in proposals:
+        data = all_data[proposal]
+        auction_data = data["auction_contention"]
+        
+        throughputs = []
+        serializable = []
+        x_vals = []
+        
+        for j, level in enumerate(levels):
+            if level in auction_data:
+                throughputs.append(auction_data[level]["throughput"])
+                serializable.append(auction_data[level]["is_serializable"])
+                x_vals.append(j)
+        
+        if not throughputs:
+            continue
+        
+        color, marker, linestyle, label = style_mapping[proposal]
+        
+        ax.plot(x_vals, throughputs, marker=marker, markersize=10,
+                linewidth=2.5, linestyle=linestyle, label=label, color=color)
+        
+        for xv, y, is_ser in zip(x_vals, throughputs, serializable):
+            if not is_ser:
+                ax.scatter([xv], [y], marker='x', s=200, c='red', zorder=5, linewidths=3)
+    
+    ax.set_xlabel('Contention Level', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Throughput (txn/sec)', fontsize=12, fontweight='bold')
+    ax.set_title('AuctionMark Contention Impact Comparison', fontsize=14, fontweight='bold')
+    ax.set_xticks(x)
+    ax.set_xticklabels(level_labels)
+    ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1))
+    ax.grid(True, alpha=0.3)
+    
+    ax.annotate(f'Solid/{MARKER_BASE} = Base, Dashed/{MARKER_IMPROVED} = Improved\nRed X = Non-Serializable',
+                xy=(0.98, 0.02), xycoords='axes fraction',
+                fontsize=9, ha='right', va='bottom',
+                bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'compare_auction_contention.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_dir / 'compare_auction_contention.pdf', bbox_inches='tight')
+    plt.close()
+    print(f"Saved: compare_auction_contention.png/pdf")
 
 
 def plot_compare_basic_workloads(all_data: Dict[str, dict], output_dir: Path):
@@ -938,13 +1094,26 @@ def plot_compare_heatmap(all_data: Dict[str, dict], output_dir: Path):
     for wh in sorted(wh_counts):
         all_scenarios.append(f"wh{wh}")
     
-    # Add contention scenarios
+    # Add TPC-C contention scenarios
     level_order = ["very_low", "low", "medium", "high", "very_high", "extreme"]
     for level in level_order:
         for data in all_data.values():
             if level in data["contention_impact"]:
                 all_scenarios.append(f"cont_{level}")
                 break
+    
+    # Add AuctionMark contention scenarios
+    auction_level_order = ["low", "medium", "high", "extreme"]
+    for level in auction_level_order:
+        for data in all_data.values():
+            if level in data["auction_contention"]:
+                all_scenarios.append(f"auc_{level}")
+                break
+    # Include any auction levels not in the predefined order
+    for data in all_data.values():
+        for level in sorted(data["auction_contention"].keys()):
+            if level not in auction_level_order and f"auc_{level}" not in all_scenarios:
+                all_scenarios.append(f"auc_{level}")
     
     # Remove duplicates while preserving order
     seen = set()
@@ -985,6 +1154,11 @@ def plot_compare_heatmap(all_data: Dict[str, dict], output_dir: Path):
                 if level in data["contention_impact"]:
                     throughput = data["contention_impact"][level]["throughput"]
                     is_ser = data["contention_impact"][level]["is_serializable"]
+            elif scenario.startswith("auc_"):
+                level = scenario[4:]
+                if level in data["auction_contention"]:
+                    throughput = data["auction_contention"][level]["throughput"]
+                    is_ser = data["auction_contention"][level]["is_serializable"]
             
             row.append(throughput)
             ser_row.append(is_ser)
@@ -1099,7 +1273,7 @@ def generate_comparison_report(all_data: Dict[str, dict], output_dir: Path):
         if best_proposal:
             report_lines.append(f"  wh{wh:<18}: {best_proposal} ({best_throughput:,.0f} txn/sec)")
     
-    # Contention levels
+    # TPC-C contention levels
     level_order = ["very_low", "low", "medium", "high", "very_high", "extreme"]
     for level in level_order:
         best_proposal = None
@@ -1113,6 +1287,29 @@ def generate_comparison_report(all_data: Dict[str, dict], output_dir: Path):
                     best_proposal = proposal
         if best_proposal:
             report_lines.append(f"  cont_{level:<14}: {best_proposal} ({best_throughput:,.0f} txn/sec)")
+    
+    # AuctionMark contention levels
+    auction_level_order = ["low", "medium", "high", "extreme"]
+    all_auction_levels = set()
+    for data in all_data.values():
+        all_auction_levels.update(data["auction_contention"].keys())
+    auction_levels = [l for l in auction_level_order if l in all_auction_levels]
+    for l in sorted(all_auction_levels):
+        if l not in auction_levels:
+            auction_levels.append(l)
+    
+    for level in auction_levels:
+        best_proposal = None
+        best_throughput = -1
+        for proposal in proposals:
+            if level in all_data[proposal]["auction_contention"]:
+                tp = all_data[proposal]["auction_contention"][level]["throughput"]
+                is_ser = all_data[proposal]["auction_contention"][level]["is_serializable"]
+                if is_ser and tp > best_throughput:
+                    best_throughput = tp
+                    best_proposal = proposal
+        if best_proposal:
+            report_lines.append(f"  auc_{level:<15}: {best_proposal} ({best_throughput:,.0f} txn/sec)")
     
     report_lines.append("")
     report_lines.append("=" * 80)
@@ -1170,6 +1367,25 @@ def generate_summary_report(data: dict, results: dict, output_dir: Path):
         if "very_low" in cont_data and "extreme" in cont_data:
             if cont_data["very_low"]["throughput"] > 0:
                 degradation = (1 - cont_data["extreme"]["throughput"] / cont_data["very_low"]["throughput"]) * 100
+                report_lines.append(f"  Throughput degradation: {degradation:.1f}%")
+        report_lines.append("")
+    
+    auction_data = data["auction_contention"]
+    if auction_data:
+        report_lines.append("AUCTIONMARK CONTENTION:")
+        auction_level_order = ["low", "medium", "high", "extreme"]
+        auction_levels = [l for l in auction_level_order if l in auction_data]
+        for l in sorted(auction_data.keys()):
+            if l not in auction_levels:
+                auction_levels.append(l)
+        for level in auction_levels:
+            info = auction_data[level]
+            status = "✓" if info["is_serializable"] else "✗"
+            report_lines.append(f"  {level:12s}: {info['throughput']:>10,.1f} txn/sec [{status}]")
+        
+        if "low" in auction_data and "extreme" in auction_data:
+            if auction_data["low"]["throughput"] > 0:
+                degradation = (1 - auction_data["extreme"]["throughput"] / auction_data["low"]["throughput"]) * 100
                 report_lines.append(f"  Throughput degradation: {degradation:.1f}%")
         report_lines.append("")
     
@@ -1264,6 +1480,7 @@ Examples:
         print("\nGenerating comparison plots...")
         plot_compare_warehouse_scalability(all_data, output_dir)
         plot_compare_contention_impact(all_data, output_dir)
+        plot_compare_auction_contention(all_data, output_dir)
         plot_compare_basic_workloads(all_data, output_dir)
         plot_compare_overall_scores(all_data, output_dir)
         plot_compare_heatmap(all_data, output_dir)
@@ -1298,6 +1515,7 @@ Examples:
         print("\nGenerating comparison plots...")
         plot_compare_warehouse_scalability(all_data, output_dir)
         plot_compare_contention_impact(all_data, output_dir)
+        plot_compare_auction_contention(all_data, output_dir)
         plot_compare_basic_workloads(all_data, output_dir)
         plot_compare_overall_scores(all_data, output_dir)
         plot_compare_heatmap(all_data, output_dir)
@@ -1333,6 +1551,7 @@ Examples:
         print("\nGenerating plots...")
         plot_warehouse_scalability(data, output_dir)
         plot_contention_impact(data, output_dir)
+        plot_auction_contention(data, output_dir)
         plot_all_scenarios(data, output_dir)
         plot_latency_breakdown(data, output_dir)
         
