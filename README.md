@@ -2,7 +2,10 @@
 
 HakiCC is an LLM-driven multi-agent pipeline that automatically designs, verifies, and optimizes concurrency control (CC) protocols tailored to a given target application. Given a workload description, HakiCC generates an application-specific CC protocol, iteratively repairs it for conflict-serializability, and produces a verified implementation ready for performance evaluation.
 
-This repository implements **Stage 1** of the HakiCC pipeline: the multi-agent system that takes a workload description as input, generates a CC protocol in Java, and iteratively verifies it for conflict-serializability using a Java-based correctness harness.
+The pipeline has two stages:
+
+- **Stage 1** (this repository): a multi-agent system that takes a workload description, generates a CC protocol in Java, and iteratively verifies it for conflict-serializability using a Java-based correctness harness.
+- **Stage 2** (`HakiCC_openEvolve/` submodule): an LLM-driven evolutionary loop (OpenEvolve) that takes a Stage 1 verified protocol and optimizes it for throughput against the target workload.
 
 ## Layout
 
@@ -31,6 +34,7 @@ This repository implements **Stage 1** of the HakiCC pipeline: the multi-agent s
   - `benchmark_plotter.py`: plots benchmark results from `output.json`
 - `run_agent.py`: runs the workflow and streams messages; emits `workflow_diagram.png`
 - `run_with_ui.py`: runs the workflow with a terminal UI
+- `HakiCC_openEvolve/`: git submodule — Stage 2 OpenEvolve-based evolutionary optimizer ([gsoosk/openevolve_HakiCC](https://github.com/gsoosk/openevolve_HakiCC))
 
 ## Environment Variables
 
@@ -114,6 +118,18 @@ python tests_java/benchmark_plotter.py
 - Latest implementation: `tests_java/GeneratedCC.java` (overwritten each generation).
 - Archived snapshots: `tests_java/final_generations/generated_cc_n.java` (created by the final report node).
 - Workflow visualization: `workflow_diagram.png`.
+
+## Stage 2 — Evolutionary Optimization
+
+Stage 2 lives in the `HakiCC_openEvolve/` submodule ([gsoosk/openevolve_HakiCC](https://github.com/gsoosk/openevolve_HakiCC)). It takes a conflict-serializable protocol produced by Stage 1 and runs an LLM-driven evolutionary loop (OpenEvolve) to optimize throughput for the target workload.
+
+To initialize the submodule after cloning:
+
+```bash
+git submodule update --init --recursive
+```
+
+See `HakiCC_openEvolve/README.md` for its own setup and usage instructions.
 
 ## Notes
 
