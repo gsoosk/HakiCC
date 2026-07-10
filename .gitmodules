@@ -1,0 +1,3 @@
+[submodule "HakiCC_openEvolve"]
+	path = HakiCC_openEvolve
+	url = git@github.com:gsoosk/openevolve_HakiCC.git

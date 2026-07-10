@@ -8,11 +8,12 @@
 
 # Configuration: Add your server names/IPs here
 SERVERS=(
-    "server"
-    "server1"
-    "server2"
-    "server3"
-    "server4"
+    # "server"
+    # "server1"
+    # "server2"
+    # "server3"
+    # "server4"
+    "openEvolve"
     # Add more servers as needed
 )
 
@@ -22,6 +23,9 @@ REPO_HAKICC="git@github.com:gsoosk/HakiCC.git"
 
 # Base directory for repositories on remote servers
 REMOTE_BASE_DIR="~/projects"
+
+# LiteLLM API Key (will be prompted if not set)
+LITELLM_API_KEY=""
 
 # Colors for output
 RED='\033[0;31m'
@@ -56,13 +60,14 @@ log_error() {
 
 setup_server() {
     local server=$1
+    local api_key=$2
     
     echo ""
     echo "============================================================================="
     echo "Setting up server: $server"
     echo "============================================================================="
     
-    ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "$server" bash -s << 'REMOTE_SCRIPT'
+    ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "$server" bash -s "$api_key" << 'REMOTE_SCRIPT'
         set -e
         
         # Colors for output
@@ -283,6 +288,65 @@ EOF
         fi
         
         # -----------------------------------------------------------------
+        # 6. Install and setup LiteLLM (globally on system)
+        # -----------------------------------------------------------------
+        log_info "Installing LiteLLM globally on system..."
+        
+        sudo pip3 install litellm
+        log_success "LiteLLM installed successfully"
+        
+        # Create LiteLLM config directory
+        mkdir -p "$HOME/.litellm"
+        
+        # Create LiteLLM config file with API key from parameter
+        cat > "$HOME/.litellm/litellm_config.yaml" << EOF
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: azure/gpt-4o
+      api_base: https://azureapi.zotgpt.uci.edu
+      api_key: $1
+      api_version: "2024-02-01"
+
+litellm_settings:
+  drop_params: true
+EOF
+        
+        log_success "Created LiteLLM config file at $HOME/.litellm/litellm_config.yaml"
+        
+        # Create systemd service file for LiteLLM
+        sudo tee /etc/systemd/system/litellm.service > /dev/null << EOF
+[Unit]
+Description=LiteLLM Proxy
+After=network.target
+
+[Service]
+Type=simple
+User=$(whoami)
+WorkingDirectory=$HOME
+ExecStart=/usr/local/bin/litellm --config $HOME/.litellm/litellm_config.yaml --port 4000
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        
+        # Reload systemd daemon and enable LiteLLM service
+        sudo systemctl daemon-reload
+        sudo systemctl enable litellm.service
+        sudo systemctl start litellm.service
+        
+        # Check if service started successfully
+        if sudo systemctl is-active --quiet litellm.service; then
+            log_success "LiteLLM service started successfully on port 4000"
+        else
+            log_warning "LiteLLM service may not have started. Check with: sudo systemctl status litellm.service"
+        fi
+        
+        # -----------------------------------------------------------------
         # Done!
         # -----------------------------------------------------------------
         echo ""
@@ -295,6 +359,11 @@ EOF
         echo "To activate environments:"
         echo "  cd $BASE_DIR/openevolve_HakiCC && source venv/bin/activate"
         echo "  cd $BASE_DIR/HakiCC && source venv/bin/activate"
+        echo ""
+        echo "LiteLLM Service:"
+        echo "  - Status: sudo systemctl status litellm.service"
+        echo "  - Logs: sudo journalctl -u litellm.service -f"
+        echo "  - Test: curl http://localhost:4000/v1/chat/completions -H 'Content-Type: application/json' -d '{\"model\": \"gpt-4o\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 100}'"
         echo ""
 REMOTE_SCRIPT
     
@@ -318,6 +387,19 @@ main() {
     echo "============================================================================="
     echo ""
     
+    # Prompt for LiteLLM API Key
+    echo "Before starting, please provide your LiteLLM API key:"
+    read -sp "Enter LITELLM_API_KEY: " LITELLM_API_KEY
+    echo ""
+    
+    if [ -z "$LITELLM_API_KEY" ]; then
+        log_error "API key cannot be empty. Exiting."
+        exit 1
+    fi
+    
+    log_success "API key received"
+    echo ""
+    
     if [ ${#SERVERS[@]} -eq 0 ]; then
         log_error "No servers configured. Please edit the SERVERS array in this script."
         exit 1
@@ -330,7 +412,7 @@ main() {
     local success_count=0
     
     for server in "${SERVERS[@]}"; do
-        if setup_server "$server"; then
+        if setup_server "$server" "$LITELLM_API_KEY"; then
             ((success_count++))
         else
             failed_servers+=("$server")
