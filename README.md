@@ -34,7 +34,7 @@ The pipeline has two stages:
   - `benchmark_plotter.py`: plots benchmark results from `output.json`
 - `run_agent.py`: runs the workflow and streams messages; emits `workflow_diagram.png`
 - `run_with_ui.py`: runs the workflow with a terminal UI
-- `HakiCC_openEvolve/`: git submodule — Stage 2 OpenEvolve-based evolutionary optimizer
+- `HakiCC_openEvolve/`: Stage 2 OpenEvolve-based evolutionary optimizer
 
 ## Environment Variables
 
@@ -121,15 +121,9 @@ python tests_java/benchmark_plotter.py
 
 ## Stage 2 — Evolutionary Optimization
 
-Stage 2 lives in the `HakiCC_openEvolve/` submodule. It takes a conflict-serializable protocol produced by Stage 1 and runs an LLM-driven evolutionary loop (OpenEvolve) to optimize throughput for the target workload.
+Stage 2 lives in the `HakiCC_openEvolve/` directory. It takes a conflict-serializable protocol produced by Stage 1 and runs an LLM-driven evolutionary loop (OpenEvolve) to optimize throughput for the target workload.
 
-To initialize the submodule after cloning:
-
-```bash
-git submodule update --init --recursive
-```
-
-See `HakiCC_openEvolve/README.md` for its own setup and usage instructions.
+See `HakiCC_openEvolve/CC/README.md` for configuration and how to run Stage 2.
 
 ## Notes
 
