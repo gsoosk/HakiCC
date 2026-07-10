@@ -62,24 +62,33 @@ class MockKVStore(VersionedKVStore):
 
     # Override
     def get(self, key: str, ts: int) -> Optional[int]:
-        val = super().get(key, ts)
-        txid = self.current_txid()
-        if txid is None:
-            txid = self._get_txid()
-        if txid is not None:
-            self._on_get(txid, key)
-        return val
-
+        chain = self._get_chain(key)
+        with chain.lock:
+            val = super().get(key, ts)
+            txid = self.current_txid()
+            if txid is None:
+                txid = self._get_txid()
+            if txid is not None:
+                self._on_get(txid, key)
+            return val
     # Override
     def put(self, writes: Dict[str, int], commit_ts: int) -> None:
-        txid = self.current_txid()
-        if txid is None:
-            txid = self._get_txid()
-        # Log per-key writes before applying
-        if txid is not None:
-            for k in writes.keys():
-                self._on_put(txid, k)
-        super().put(writes, commit_ts)
+        # First, lock all chains in a sorted manner
+        chains_to_lock = sorted([(self._get_chain(k), k) for k in writes.keys()], key=lambda x: x[1])
+        for chain, _ in chains_to_lock:
+            chain.lock.acquire()
+        try:
+            txid = self.current_txid()
+            if txid is None:
+                txid = self._get_txid()
+            # Log per-key writes before applying
+            if txid is not None:
+                for k in writes.keys():
+                    self._on_put(txid, k)
+            super().put(writes, commit_ts)
+        finally:
+            for chain, _ in chains_to_lock:
+                chain.lock.release()
 
 
 class ConcurrentRunner:
@@ -384,6 +393,10 @@ def explain_cycle_kahn(graph: Dict[int, Set[int]], evidence: Dict[Tuple[int, int
 
     lines: List[str] = []
     lines.append(f"Cycle txns: {cycle_nodes}")
+    if (len(cycle_nodes) > 10):
+        lines[-1] = f"Cycle txns: [{', '.join(map(str, cycle_nodes[:5]))} ... {', '.join(map(str, cycle_nodes[-5:]))}]"
+        return "\n".join(lines) # too many nodes, just return the list of nodes
+
     lines.append("Edges (with example evidence):")
     for i in range(len(cycle_nodes) - 1):
         u = cycle_nodes[i]

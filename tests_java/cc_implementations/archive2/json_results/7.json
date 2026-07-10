@@ -1,0 +1,12 @@
+{
+  "metrics": {
+    "correctness": 0.0,
+    "throughput": 0.0,
+    "combined_score": 0.0
+  },
+  "artifacts": {
+    "error_type": "java.lang.RuntimeException",
+    "error_message": "ConcurrentRunner failed with error: java.lang.NullPointerException\ntests_java.GeneratedCC.write(CCImplementationTemp.java:277)\ntests_java.Evaluator$ConcurrentRunner.logWrite(Evaluator.java:344)\ntests_java.Evaluator.tpccNewOrderWithConfig(Evaluator.java:1076)\ntests_java.Evaluator.lambda$createTpccWorkload$27(Evaluator.java:1192)\ntests_java.Evaluator$ConcurrentRunner.lambda$run$2(Evaluator.java:227)\njava.base/java.lang.Thread.run(Thread.java:829)\n",
+    "full_traceback": "tests_java.Evaluator$ConcurrentRunner.run(Evaluator.java:273)\ntests_java.Evaluator.runScenario(Evaluator.java:1268)\ntests_java.Evaluator.evaluate(Evaluator.java:1343)\ntests_java.Evaluator.main(Evaluator.java:1570)\n"
+  }
+}

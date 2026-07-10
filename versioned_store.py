@@ -56,10 +56,12 @@ class VersionedKVStore:
             return None
 
     def put(self, writes: Dict[str, Any], commit_ts: int) -> None:
-        # Apply each key independently under its own lock
-        for k, v in writes.items():
-            chain = self._get_chain(k)
-            with chain.lock:
+        # Lock all chains in a sorted manner before applying writes
+        chains_to_lock = sorted([(self._get_chain(k), k, v) for k, v in writes.items()], key=lambda x: x[1])
+        for chain, k, v in chains_to_lock:
+            chain.lock.acquire()
+        try:
+            for chain, k, v in chains_to_lock:
                 if chain.ts and commit_ts >= chain.ts[-1]:
                     # Fast-path append
                     chain.ts.append(commit_ts)
@@ -69,3 +71,6 @@ class VersionedKVStore:
                     pos = bisect_right(chain.ts, commit_ts)
                     chain.ts.insert(pos, commit_ts)
                     chain.vals.insert(pos, v)
+        finally:
+            for chain, _, _ in chains_to_lock:
+                chain.lock.release()

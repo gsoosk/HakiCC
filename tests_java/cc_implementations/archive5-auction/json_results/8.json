@@ -1,0 +1,214 @@
+{
+  "metrics": {
+    "correctness": 1.0,
+    "throughput_score": 0.007899709677419353,
+    "combined_score": 0.5039498548387097,
+    "pre_known_transactions_under_high_contention": 0.007321,
+    "pre_known_transactions_normal_scenario": 0.0071519999999999995
+  },
+  "artifacts": {
+    "tpcc_avg_throughputs": 4163.181818181818,
+    "auction_avg_throughput": 5575.799999999999,
+    "pre_known_txn_type": "tpcc",
+    "scenario_summaries": {
+      "counters": {
+        "committed": 99879,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 99879,
+        "throughput": 19975.8,
+        "avg_read_time_nanos": 1321.745171657706,
+        "avg_write_time_nanos": 0.0,
+        "avg_commit_time_nanos": 3202504.085483435,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "bank": {
+        "committed": 45118,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 180472,
+        "throughput": 9023.6,
+        "avg_read_time_nanos": 1015.5826764171452,
+        "avg_write_time_nanos": 553.8832812648473,
+        "avg_commit_time_nanos": 611871.9350530478,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "deadlock": {
+        "committed": 67958,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 271832,
+        "throughput": 13591.6,
+        "avg_read_time_nanos": 507.0890593366256,
+        "avg_write_time_nanos": 287.39883114794424,
+        "avg_commit_time_nanos": 1509018.3313040435,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "auction_contention_low": {
+        "committed": 21992,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 141504,
+        "throughput": 4398.4,
+        "avg_read_time_nanos": 2213.6537294171067,
+        "avg_write_time_nanos": 1067.88141455762,
+        "avg_commit_time_nanos": 1.1339566588636465E7,
+        "avg_rollback_time_nanos": 1.0008573507855752E7
+      },
+      "auction_contention_high": {
+        "committed": 29437,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 168380,
+        "throughput": 5887.4,
+        "avg_read_time_nanos": 1131.3540317510217,
+        "avg_write_time_nanos": 579.8475616687507,
+        "avg_commit_time_nanos": 7720395.224179866,
+        "avg_rollback_time_nanos": 6131576.988118406
+      },
+      "tpcc_wh1": {
+        "committed": 19007,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 391149,
+        "throughput": 3801.4,
+        "avg_read_time_nanos": 1132.976410703002,
+        "avg_write_time_nanos": 486.28003025178054,
+        "avg_commit_time_nanos": 1485496.8364135816,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "tpcc_wh2": {
+        "committed": 20043,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 457949,
+        "throughput": 4008.6,
+        "avg_read_time_nanos": 932.9785610949681,
+        "avg_write_time_nanos": 439.051189156198,
+        "avg_commit_time_nanos": 2300190.7092218143,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "tpcc_wh4": {
+        "committed": 20298,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 498435,
+        "throughput": 4059.6,
+        "avg_read_time_nanos": 860.3763771043032,
+        "avg_write_time_nanos": 384.4162073546454,
+        "avg_commit_time_nanos": 3804153.153632318,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "tpcc_wh8": {
+        "committed": 21456,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 540246,
+        "throughput": 4291.2,
+        "avg_read_time_nanos": 816.9607753099548,
+        "avg_write_time_nanos": 333.59883857907,
+        "avg_commit_time_nanos": 5569752.644848401,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "tpcc_wh16": {
+        "committed": 18340,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 448215,
+        "throughput": 3668.0,
+        "avg_read_time_nanos": 860.8738461401383,
+        "avg_write_time_nanos": 358.3681980051825,
+        "avg_commit_time_nanos": 9260445.478157658,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "auction_contention_medium": {
+        "committed": 27885,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 163821,
+        "throughput": 5577.0,
+        "avg_read_time_nanos": 979.7523403821136,
+        "avg_write_time_nanos": 508.2270529470529,
+        "avg_commit_time_nanos": 8696096.399936112,
+        "avg_rollback_time_nanos": 5168576.365575183
+      },
+      "auction_contention_extreme": {
+        "committed": 32202,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 177025,
+        "throughput": 6440.4,
+        "avg_read_time_nanos": 1046.5686876911602,
+        "avg_write_time_nanos": 484.53529467953007,
+        "avg_commit_time_nanos": 6839472.969640151,
+        "avg_rollback_time_nanos": 4632383.484626015
+      },
+      "tpcc_contention_very_low": {
+        "committed": 19380,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 488472,
+        "throughput": 3876.0,
+        "avg_read_time_nanos": 997.2448015550814,
+        "avg_write_time_nanos": 434.0226725192205,
+        "avg_commit_time_nanos": 6246512.00796384,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "tpcc_contention_low": {
+        "committed": 19129,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 457091,
+        "throughput": 3825.8,
+        "avg_read_time_nanos": 1015.2145513069538,
+        "avg_write_time_nanos": 442.0021309460724,
+        "avg_commit_time_nanos": 5761770.902028064,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "tpcc_contention_medium": {
+        "committed": 23394,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 470640,
+        "throughput": 4678.8,
+        "avg_read_time_nanos": 844.8807954106147,
+        "avg_write_time_nanos": 362.43601776092316,
+        "avg_commit_time_nanos": 3573154.1915956573,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "tpcc_contention_high": {
+        "committed": 22390,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 348787,
+        "throughput": 4478.0,
+        "avg_read_time_nanos": 832.0906341911765,
+        "avg_write_time_nanos": 381.7333611349902,
+        "avg_commit_time_nanos": 2710584.9122026092,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "tpcc_contention_very_high": {
+        "committed": 21963,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 318394,
+        "throughput": 4392.6,
+        "avg_read_time_nanos": 821.3106006500368,
+        "avg_write_time_nanos": 374.02518592885167,
+        "avg_commit_time_nanos": 2235619.4942836603,
+        "avg_rollback_time_nanos": 0.0
+      },
+      "tpcc_contention_extreme": {
+        "committed": 23575,
+        "stalled_threads": 0,
+        "is_serializable": true,
+        "ops": 316645,
+        "throughput": 4715.0,
+        "avg_read_time_nanos": 631.3620499633948,
+        "avg_write_time_nanos": 299.8424226023963,
+        "avg_commit_time_nanos": 1482376.2607777985,
+        "avg_rollback_time_nanos": 0.0
+      }
+    }
+  }
+}
