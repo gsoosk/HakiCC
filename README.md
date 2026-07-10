@@ -19,7 +19,7 @@ The pipeline has two stages:
 - `agent/`: agent workflow, prompts, and LLM wiring
   - `agent.py`: builds the LangGraph workflow graph
   - `prompts.py`: system/user prompts for proposal, generation, correction, and reporting
-  - `llm.py`: model configuration (Gemini / ZotGPT)
+  - `llm.py`: model configuration (Gemini / Azure OpenAI)
   - `transactions/`: Java transaction definitions (`Transaction.java`, `AuctionMarkTransaction.java`)
 - `tests_java/`: Java-based evaluation framework (active correctness and performance harness)
   - `Evaluator.java`: correctness checker and concurrent workload runner
@@ -34,7 +34,7 @@ The pipeline has two stages:
   - `benchmark_plotter.py`: plots benchmark results from `output.json`
 - `run_agent.py`: runs the workflow and streams messages; emits `workflow_diagram.png`
 - `run_with_ui.py`: runs the workflow with a terminal UI
-- `HakiCC_openEvolve/`: git submodule — Stage 2 OpenEvolve-based evolutionary optimizer ([gsoosk/openevolve_HakiCC](https://github.com/gsoosk/openevolve_HakiCC))
+- `HakiCC_openEvolve/`: git submodule — Stage 2 OpenEvolve-based evolutionary optimizer
 
 ## Environment Variables
 
@@ -42,7 +42,7 @@ The pipeline has two stages:
 |---|---|---|
 | `GOOGLE_API_KEY` | Yes (Gemini) | API key for Google Gemini (default LLM provider) |
 | `GOOGLE_CLOUD_PROJECT` | Yes (Gemini) | Google Cloud project ID for Gemini access |
-| `ZOTGPT_API_KEY` | Yes (ZotGPT) | API key for UCI's ZotGPT Azure OpenAI endpoint (alternative provider) |
+| `AZURE_OPENAI_API_KEY` | Yes (Azure OpenAI) | API key for Azure OpenAI endpoint (alternative provider) |
 
 Create a `.env` file or export variables before running:
 
@@ -121,7 +121,7 @@ python tests_java/benchmark_plotter.py
 
 ## Stage 2 — Evolutionary Optimization
 
-Stage 2 lives in the `HakiCC_openEvolve/` submodule ([gsoosk/openevolve_HakiCC](https://github.com/gsoosk/openevolve_HakiCC)). It takes a conflict-serializable protocol produced by Stage 1 and runs an LLM-driven evolutionary loop (OpenEvolve) to optimize throughput for the target workload.
+Stage 2 lives in the `HakiCC_openEvolve/` submodule. It takes a conflict-serializable protocol produced by Stage 1 and runs an LLM-driven evolutionary loop (OpenEvolve) to optimize throughput for the target workload.
 
 To initialize the submodule after cloning:
 
