@@ -7,8 +7,8 @@ from rich import print as rich_print
 from rich.markdown import Markdown
 from langchain_core.messages import AIMessage, HumanMessage
 
-def get_workflow(inspiration_pdf: str | None = None, language_mode: str = "java", target_cc_count: int = 1, workload: str = "tpcc") -> StateGraph:
-    agent = Agent(inspiration_pdf_path=inspiration_pdf, language_mode=language_mode, target_cc_count=target_cc_count, workload=workload)
+def get_workflow(inspiration_pdf: str | None = None, language_mode: str = "java", target_cc_count: int = 1, workload: str = "tpcc", llm_provider: str = "gemini") -> StateGraph:
+    agent = Agent(inspiration_pdf_path=inspiration_pdf, language_mode=language_mode, target_cc_count=target_cc_count, workload=workload, llm_provider=llm_provider)
     workflow = agent.get_workflow()
     workflow.get_graph().draw_mermaid_png(max_retries=2)
     with open("workflow_diagram.png", "wb") as f:
@@ -65,7 +65,8 @@ if __name__ == "__main__":
     parser.add_argument("--language", dest="language", type=str, default="java", choices=["python", "java"], help="Target language for code generation (python or java)")
     parser.add_argument("--target-cc-count", dest="target_cc_count", type=int, default=1, help="Number of final CC protocols to generate before stopping")
     parser.add_argument("--workload", dest="workload", type=str, default="tpcc", choices=["tpcc", "auction"], help="Pre-known transaction type (tpcc or auction)")
+    parser.add_argument("--llm", dest="llm_provider", type=str, default="gemini", choices=["gemini", "zotgpt", "copilot", "copilot-cli"], help="LLM backend (gemini, zotgpt, copilot, or copilot-cli)")
     args = parser.parse_args()
     print(args)
-    workflow = get_workflow(inspiration_pdf=args.inspiration_pdf, language_mode=args.language, target_cc_count=args.target_cc_count, workload=args.workload)
+    workflow = get_workflow(inspiration_pdf=args.inspiration_pdf, language_mode=args.language, target_cc_count=args.target_cc_count, workload=args.workload, llm_provider=args.llm_provider)
     stream_workflow_updates(workflow, target_cc_count=args.target_cc_count)

@@ -49,7 +49,7 @@ class State(TypedDict):
 
 class Agent:
 
-    def __init__(self, inspiration_pdf_path: str | None = None, inspiration_text: str | None = None, language_mode: str = "python", target_cc_count: int = 1, workload: str = "tpcc") -> None:
+    def __init__(self, inspiration_pdf_path: str | None = None, inspiration_text: str | None = None, language_mode: str = "python", target_cc_count: int = 1, workload: str = "tpcc", llm_provider: str = "gemini") -> None:
         """
         Initialize the agent.
         
@@ -59,6 +59,7 @@ class Agent:
             language_mode: "python" or "java" - determines which language to generate code in
             target_cc_count: Number of final CC protocols to generate before stopping
             workload: "tpcc" or "auction" - selects pre-known transaction type
+            llm_provider: "gemini", "zotgpt", or "copilot" - selects the LLM backend
         """
         self.language_mode = language_mode.lower()
         if self.language_mode not in ("python", "java"):
@@ -68,12 +69,13 @@ class Agent:
         if self.workload not in ("tpcc", "auction"):
             raise ValueError(f"Invalid workload: {workload}. Must be 'tpcc' or 'auction'.")
         
+        self.llm_provider = llm_provider.lower()
         self.target_cc_count = target_cc_count
         self.workflow = self.build_workflow()
-        self.llm = get_llm()
+        self.llm = get_llm(self.llm_provider)
         self.checkpointer = MemorySaver()
         self.workflow.checkpointer = self.checkpointer
-        self.novelty_llm = get_llm()
+        self.novelty_llm = get_llm(self.llm_provider)
         if inspiration_text:
             self.inspiration_source_text = inspiration_text
         elif inspiration_pdf_path:
