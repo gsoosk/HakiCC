@@ -1,0 +1,12 @@
+# Dependencies for the CodeWeaver-style Burr orchestrator (branch `burr`).
+# Apache Burr is pure-Python; installs on Windows/ARM64 and Linux alike.
+#
+#   pip install -r requirements-burr.txt
+#
+# For the live telemetry UI (optional):
+#   pip install "burr[start]"      # then run:  burr
+#
+# The LLM agents run via the GitHub Copilot CLI (`copilot`), not a Python SDK,
+# so no model/provider packages are required here. Verification reuses the
+# existing Java benchmark in tests_java/ (run on the node over SSH).
+burr[tracking]>=0.40.0

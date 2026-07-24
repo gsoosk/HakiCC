@@ -195,3 +195,9 @@ tests_java/CCImplementationTemp.java
 tests_java/GeneratedCC.java
 
 nohup.out
+
+# --- Burr pipeline (branch: burr) ---
+haki_burr/pipeline/
+haki_burr/realrun*.log
+haki_burr/pipeline_realrun.log
+.venv-burr/

@@ -93,6 +93,76 @@ python run_agent.py --workload auction --target-cc-count 10
 5. **cc_novelty_evaluator**: Decides whether to iterate further or finalize.
 6. **cc_final_report**: Saves an artifact copy to `tests_java/final_generations/generated_cc_n.java` and produces a final technical report.
 
+## Burr Orchestrator (branch `burr`)
+
+The `burr` branch provides an alternative, CodeWeaver-style implementation of the
+**Stage 1** pipeline. The orchestration is moved from LangGraph to a deterministic
+**[Apache Burr](https://burr.apache.org/)** state machine, and the LLM agents become
+**GitHub Copilot CLI custom agents** defined as markdown profiles. It reuses the
+existing HakiCC prompts verbatim and the existing Java benchmark unchanged.
+
+- **Burr** = the deterministic orchestrator (state machine, repair loop, restart
+  loop, SQLite crash-resume, telemetry UI). It never calls an LLM.
+- **Agents = markdown** (`agents/*.agent.md`), each run as one `copilot --agent NAME`
+  subprocess that owns its full agent loop (reasoning, file edits). The full HakiCC
+  prompt text is passed at invocation (imported verbatim from `agent/prompts.py`).
+- **Verification = the existing Java benchmark**, `tests_java/run_evaluator.sh
+  --correctness-only` (precedence-graph conflict-serializability), reused unchanged.
+
+Because Copilot CLI authenticates on the developer's laptop while the benchmark
+wants a high-concurrency machine, the agents run **locally** and verification is
+shipped over **SSH to a compute node** (`--verify-mode ssh`, the default) — or run
+locally with `--verify-mode local` (needs a JDK).
+
+### Stage mapping (LangGraph → Burr)
+
+| LangGraph node | Burr action | Kind |
+|---|---|---|
+| `cc_proposer` | `propose` | Copilot agent `proposer` → `proposal.md` |
+| `cc_generator` | `generate` | Copilot agent `generator` → `tests_java/GeneratedCC.java` |
+| `cc_correctness_checker` | `verify` | **deterministic** — `run_evaluator.sh` on the node |
+| `cc_novelty_evaluator` | `novelty` | Copilot agent `novelty` → `novelty.json` |
+| `cc_final_report` | `report` | Copilot agent `reporter` + versions `final_generations/` |
+| `cc_restart` | `restart` | bookkeeping |
+
+Transitions mirror Stage 1 exactly: `propose→generate→verify`, repair loop
+`verify→generate` (capped by `--max-iter`, default 40), `verify→restart` on budget
+exhaustion, `verify→novelty→report`, and `report→restart` until `--target` protocols
+are finalized.
+
+### Layout (added on `burr`)
+
+- `haki_burr/`: the package — `config.py`, `state.py`, `prompts.py` (reuses
+  `agent/prompts.py`), `copilot.py` (the `copilot` subprocess boundary), `verify.py`
+  (SSH/local Java benchmark runner), `actions.py`, `app.py` (Burr wiring), `mock.py`
+  (offline agent), `cli.py`.
+- `agents/`: `proposer.agent.md`, `generator.agent.md`, `novelty.agent.md`,
+  `reporter.agent.md`.
+- `requirements-burr.txt`: adds `burr[tracking]`.
+
+### Setup & usage
+
+```bash
+pip install -r requirements-burr.txt          # Apache Burr (+ telemetry UI)
+python -m haki_burr install-agents            # mirror agents/*.agent.md -> ~/.copilot/agents
+
+# Offline smoke test (mock agents + mock verify; no Copilot, no node, no cost):
+python -m haki_burr check
+
+# Real run: Copilot agents locally, Java benchmark on the node over SSH.
+python -m haki_burr run --workload tpcc --target 1 --app-id run-001 \
+    --verify-mode ssh --ssh-host chameleon --remote-repo projects/HakiCC
+
+# Resume a crashed run: re-run with the SAME --app-id (SQLite persister continues).
+# Telemetry UI:  burr
+```
+
+Requires the **GitHub Copilot CLI** (`copilot`) authenticated on the machine that
+runs the agents, and (for `--verify-mode ssh`) an SSH alias to a node that has this
+repo checked out with a JDK. Runtime artifacts land in `haki_burr/pipeline/`
+(gitignored); finalized protocols are versioned into `tests_java/final_generations/`.
+
+
 ## Workloads
 
 | Workload | Description |
