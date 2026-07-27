@@ -25,6 +25,7 @@ def _build_cfg(args) -> Config:
         workload=args.workload,
         target_cc_count=args.target,
         max_iterations=args.max_iter,
+        novelty_threshold=args.novelty_threshold,
         model=model,
         verify=verify,
     )
@@ -90,6 +91,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--workload", choices=["tpcc", "auction"], default="tpcc")
         sp.add_argument("--target", type=int, default=1, help="protocols to finalize")
         sp.add_argument("--max-iter", type=int, default=40, help="repair cap per protocol")
+        sp.add_argument("--novelty-threshold", type=int, default=0,
+                        help="reject+restart if novelty_score_overall < N (0 disables)")
         sp.add_argument("--model", default=None, help="Copilot model (default: CLI default)")
         sp.add_argument("--effort", default="max", help="reasoning effort")
         sp.add_argument("--verify-mode", choices=["ssh", "local"], default="ssh")

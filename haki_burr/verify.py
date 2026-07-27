@@ -51,12 +51,56 @@ def _run(cmd: list[str], timeout: float) -> subprocess.CompletedProcess:
                           encoding="utf-8", errors="replace", timeout=timeout)
 
 
+def _diagnose(result: dict, correctness: float, log_tail: str) -> str:
+    """Categorize a failing verification into the terms the repair prompt expects
+    (serializability / progress / freedom from stalls), so the generator gets a
+    sharp, actionable signal instead of only the raw JSON."""
+    scenarios = ((result.get("artifacts") or {}).get("scenario_summaries") or {})
+    non_serializable, stalled = [], []
+    for name, s in scenarios.items():
+        if not isinstance(s, dict):
+            continue
+        if s.get("is_serializable") is False:
+            non_serializable.append(name)
+        if (s.get("stalled_threads") or 0) > 0:
+            stalled.append(f"{name}({s.get('stalled_threads')})")
+
+    lines = [f"DIAGNOSIS (correctness={correctness:.3f}, need 1.000):"]
+    if non_serializable:
+        lines.append(
+            "- SERIALIZABILITY VIOLATION: the precedence graph has a cycle in "
+            f"scenario(s): {', '.join(non_serializable)}. The commit order these "
+            "scenarios produced is not conflict-serializable — tighten conflict "
+            "detection / ordering for the keys those transactions touch."
+        )
+    if stalled:
+        lines.append(
+            "- PROGRESS / STALLS: threads left stalled in scenario(s): "
+            f"{', '.join(stalled)}. Suspect deadlock, livelock, or a lock never "
+            "released — ensure forward progress and freedom from stalls."
+        )
+    lo = (log_tail or "").lower()
+    if "compilation failed" in lo or "error:" in lo:
+        lines.append("- COMPILE/RUNTIME ERROR: the benchmark log reports a build/run "
+                     "failure (see run.log tail below); fix it first.")
+    if "timed out" in lo or "timeout" in lo:
+        lines.append("- TIMEOUT: the evaluator was killed for running too long — "
+                     "likely an infinite loop, livelock, or unbounded blocking.")
+    if len(lines) == 1:
+        lines.append("- Correctness below 1.0 but no per-scenario flag was parsed; "
+                     "inspect the metrics/artifacts below.")
+    return "\n".join(lines)
+
+
 def _fail(feedback: str) -> dict:
     return {"passed": False, "correctness": 0.0, "feedback": feedback, "metrics": {}}
 
 
 def _interpret(output_json_text: str, stdout: str, stderr: str, rc: int) -> dict:
-    """Map evaluator output to a report dict (mirrors _check_java_correctness)."""
+    """Map evaluator output to a report dict (mirrors _check_java_correctness).
+
+    On failure the feedback is a categorized DIAGNOSIS followed by the full eval
+    JSON (HakiCC feeds the whole JSON back to the fixer; we prepend the diagnosis)."""
     if not output_json_text:
         return _fail(f"No output.json generated.\nstdout:\n{stdout}\nstderr:\n{stderr}")
     try:
@@ -66,9 +110,13 @@ def _interpret(output_json_text: str, stdout: str, stderr: str, rc: int) -> dict
     metrics = result.get("metrics", {}) or {}
     correctness = float(metrics.get("correctness", 0.0) or 0.0)
     passed = correctness >= 1.0
-    # On failure HakiCC feeds the whole eval JSON back to the fixer.
-    return {"passed": passed, "correctness": correctness,
-            "feedback": json.dumps(result, indent=2), "metrics": metrics}
+    if passed:
+        return {"passed": True, "correctness": correctness,
+                "feedback": json.dumps(result, indent=2), "metrics": metrics}
+    diagnosis = _diagnose(result, correctness, stdout)
+    feedback = f"{diagnosis}\n\nFull evaluator report:\n{json.dumps(result, indent=2)}"
+    return {"passed": False, "correctness": correctness,
+            "feedback": feedback, "metrics": metrics}
 
 
 def verify_ssh(cfg: Config) -> dict:

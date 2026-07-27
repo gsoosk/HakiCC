@@ -91,9 +91,14 @@ def verify(state, __tracer) -> dict:
     ).append(history=entry)
 
 
-@action(reads=[], writes=["novelty_result", "last_agent"])
+@action(reads=["novelty_restarts"], writes=["novelty_result", "novelty_ok", "novelty_restarts", "last_agent"])
 def novelty(state, __tracer) -> dict:
-    """Novelty Agent: score originality of the verified protocol -> novelty.json."""
+    """Novelty Agent: score originality of the verified protocol -> novelty.json.
+
+    Applies the optional novelty gate: if cfg.novelty_threshold > 0 and the score is
+    below it, mark novelty_ok=False so the graph restarts with a fresh proposal --
+    but only up to cfg.max_novelty_restarts times, after which the protocol is
+    accepted anyway so the run always terminates."""
     cfg = C.active()
     prompt = prompts.render("novelty", cfg)
     res = _invoke(cfg, "novelty", prompt)
@@ -105,7 +110,31 @@ def novelty(state, __tracer) -> dict:
         parsed = json.loads(m.group(0)) if m else {}
     except (OSError, ValueError):
         parsed = {}
-    return state.update(novelty_result=parsed, last_agent="novelty")
+
+    score = 0
+    try:
+        score = int(parsed.get("novelty_score_overall", 0) or 0)
+    except (TypeError, ValueError):
+        score = 0
+    restarts = state["novelty_restarts"]
+    gate_on = cfg.novelty_threshold > 0
+    below = gate_on and score < cfg.novelty_threshold
+    capped = restarts >= cfg.max_novelty_restarts
+    novelty_ok = (not below) or capped
+    if below and not capped:
+        restarts += 1
+    if __tracer is not None:
+        try:
+            __tracer.log_attributes(stage="novelty", novelty_score=score,
+                                    threshold=cfg.novelty_threshold,
+                                    novelty_ok=novelty_ok, novelty_restarts=restarts)
+        except Exception:
+            pass
+    if gate_on and not novelty_ok:
+        print(f"[haki_burr] novelty {score} < {cfg.novelty_threshold}; "
+              f"restarting for a more novel protocol ({restarts}/{cfg.max_novelty_restarts})")
+    return state.update(novelty_result=parsed, novelty_ok=novelty_ok,
+                        novelty_restarts=restarts, last_agent="novelty")
 
 
 def _next_index(final_dir: Path) -> int:
@@ -119,7 +148,7 @@ def _next_index(final_dir: Path) -> int:
 
 @action(
     reads=["generated_cc_count", "target_cc_count", "novelty_result"],
-    writes=["generated_cc_count", "done", "last_agent"],
+    writes=["generated_cc_count", "done", "novelty_restarts", "last_agent"],
 )
 def report(state, __tracer) -> dict:
     """Reporter Agent (-> report.md) + deterministic versioning into
@@ -153,7 +182,8 @@ def report(state, __tracer) -> dict:
         except Exception:
             pass
     print(f"[haki_burr] finalized CC #{count} of {target} target")
-    return state.update(generated_cc_count=count, done=done, last_agent="reporter")
+    return state.update(generated_cc_count=count, done=done,
+                        novelty_restarts=0, last_agent="reporter")
 
 
 @action(reads=[], writes=["code_iteration", "verified", "report", "novelty_result", "last_agent"])

@@ -47,7 +47,10 @@ def build_application(cfg: Config, app_id: str, db_path: str | None = None):
         ("verify", "generate", expr("not verified and code_iteration < max_iterations")),
         # failed and budget exhausted -> restart (new proposal)
         ("verify", "restart", default),
-        ("novelty", "report"),
+        # novelty gate: finalize if the protocol cleared it, else restart for a
+        # more novel proposal (bounded by max_novelty_restarts inside the action).
+        ("novelty", "report", expr("novelty_ok")),
+        ("novelty", "restart", default),
         # more protocols wanted -> restart; else done
         ("report", "terminal", expr("done")),
         ("report", "restart", default),

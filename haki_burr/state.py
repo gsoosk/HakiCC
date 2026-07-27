@@ -11,6 +11,8 @@ State keys
   verified          : bool   did the last verify pass (correctness == 1.0)?
   report            : dict   last verification feedback (cleared on pass); repair input
   novelty_result    : dict   parsed novelty.json for the current protocol
+  novelty_ok        : bool  did the current protocol clear the novelty gate?
+  novelty_restarts  : int   novelty-driven restarts so far (capped)
   generated_cc_count: int   how many protocols have been finalized so far
   target_cc_count   : int   stop after this many finalized protocols
   workload          : str   "tpcc" | "auction"
@@ -30,6 +32,8 @@ def initial_state(cfg: Config) -> dict:
         "verified": False,
         "report": {},
         "novelty_result": {},
+        "novelty_ok": True,
+        "novelty_restarts": 0,
         "generated_cc_count": 0,
         "target_cc_count": cfg.target_cc_count,
         "workload": cfg.workload,

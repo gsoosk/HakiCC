@@ -49,6 +49,13 @@ class Config:
     target_cc_count: int = 1                 # how many final protocols to produce
     max_iterations: int = 40                 # == MAX_CODE_ITERATIONS (repair cap)
 
+    # Optional novelty gate (paper-faithful; off by default). If > 0, a verified
+    # protocol whose novelty_score_overall is below this threshold is rejected and
+    # the pipeline restarts with a fresh proposal, up to max_novelty_restarts times
+    # (after which it is accepted anyway, so the run always terminates).
+    novelty_threshold: int = 0               # 0 disables the gate
+    max_novelty_restarts: int = 3
+
     # --- layout ---
     root: Path = REPO_ROOT
     slug: str = "hakicc-stage1"

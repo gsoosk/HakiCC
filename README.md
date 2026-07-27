@@ -157,6 +157,17 @@ python -m haki_burr run --workload tpcc --target 1 --app-id run-001 \
 # Telemetry UI:  burr
 ```
 
+Useful options: `--target N` (protocols to finalize), `--max-iter N` (repair cap,
+default 40), `--novelty-threshold N` (reject a verified protocol whose
+`novelty_score_overall` is below `N` and restart for a more novel one — bounded by
+`max_novelty_restarts`; `0` disables, the default), `--model`, `--effort` (default
+`max`), and `--verify-mode {ssh,local}`.
+
+On a failed verification, the repair loop receives a **categorized diagnosis**
+(serializability violation / progress stalls / compile-runtime error / timeout)
+extracted from the benchmark's per-scenario summaries, in addition to the full
+evaluator JSON — giving the generator a sharper repair signal.
+
 Requires the **GitHub Copilot CLI** (`copilot`) authenticated on the machine that
 runs the agents, and (for `--verify-mode ssh`) an SSH alias to a node that has this
 repo checked out with a JDK. Runtime artifacts land in `haki_burr/pipeline/`
