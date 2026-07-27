@@ -91,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--target", type=int, default=1, help="protocols to finalize")
         sp.add_argument("--max-iter", type=int, default=40, help="repair cap per protocol")
         sp.add_argument("--model", default=None, help="Copilot model (default: CLI default)")
-        sp.add_argument("--effort", default="high", help="reasoning effort")
+        sp.add_argument("--effort", default="max", help="reasoning effort")
         sp.add_argument("--verify-mode", choices=["ssh", "local"], default="ssh")
         sp.add_argument("--ssh-host", default="chameleon")
         sp.add_argument("--remote-repo", default="projects/HakiCC")

@@ -35,7 +35,7 @@ class ModelConfig:
     """Copilot CLI model + reasoning effort. None => let the CLI pick its default
     (keeps us robust to model-name changes)."""
     default: str | None = None              # e.g. "claude-sonnet-4.5", "gpt-5"
-    effort_default: str | None = "high"     # none|minimal|low|medium|high|xhigh|max
+    effort_default: str | None = "max"      # none|minimal|low|medium|high|xhigh|max
     effort: dict[str, str] = field(default_factory=dict)  # per-agent override
 
     def effort_for(self, agent: str) -> str | None:
